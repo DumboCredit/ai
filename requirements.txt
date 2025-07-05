@@ -3,4 +3,4 @@ langchain-openai
 fastapi
 uvicorn
 python-dotenv
--qU "langchain-chroma>=0.1.2"
+langchain-chroma>=0.1.2
