@@ -1,5 +1,5 @@
 # imports
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 import logging
 from fastapi.responses import JSONResponse
 from langchain_openai import OpenAIEmbeddings
@@ -10,6 +10,7 @@ from langchain_openai import ChatOpenAI
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -33,6 +34,14 @@ vector_store = Chroma(
 app = FastAPI(
     title= "DumboAI",
     version="0.1"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +103,7 @@ class CREDIT_SUMMARY(BaseModel):
 # request
 class CreditRequest(BaseModel):
     USER_ID: str
+    API_KEY: str
     BORROWER: Optional[BORROWER]	
     CREDIT_SCORE:list[CREDIT_SCORE]
     CREDIT_INQUIRY: list[CREDIT_INQUIRY]
@@ -104,6 +114,8 @@ class CreditRequest(BaseModel):
 # routes
 @app.post("/add-user-credit-data")
 async def add_user_credit_data(historic_credit:CreditRequest):
+        if os.getenv("API_KEY") != historic_credit.API_KEY:
+            raise HTTPException(status_code=400, detail="Api key dont match")
         documents = []
          # load personal data
         if not historic_credit.BORROWER.FirstName is None:
@@ -172,14 +184,19 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     ))
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store.add_documents(documents=documents, ids=uuids)
+        return "ok"
   
 # model
 class QueryRequest(BaseModel):
+    API_KEY: str
     user_id: str
     query: str
+
 # endpoint to retrieve an answer
 @app.post("/query")
 async def query(query_request:QueryRequest):
+    if os.getenv("API_KEY") != query_request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
         search_kwargs={"score_threshold": 0.2, "k": 20, "filter": {"user_id": query_request.user_id} }
@@ -204,4 +221,4 @@ async def query(query_request:QueryRequest):
     return chain.invoke({"input": query_request.query}).answer
 
 if __name__=="__main__":
-    uvicorn.run(app, host="localhost", port=8080)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
