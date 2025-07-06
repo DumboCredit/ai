@@ -231,6 +231,21 @@ async def query(query_request:QueryRequest):
         'answer': response['answer'],
     }
 
+# endpoint for knowing when user is on db
+class IsUserCreditDataRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+
+@app.post("/is-user-credit-data")
+async def get_is_user_credit_data(request:IsUserCreditDataRequest):
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    response = vector_store.get(where={"user_id": request.user_id})
+    if len(response['documents']) > 0:
+        return "ok"
+    else:
+        raise HTTPException(status_code=404, detail="This user does'nt have credit data")
+
 class DeleteUserCreditDataRequest(BaseModel):
     API_KEY: str
     user_id: str
