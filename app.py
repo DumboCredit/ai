@@ -7,6 +7,7 @@ from langchain_chroma import Chroma
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
+# from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
@@ -20,6 +21,8 @@ import os
 # env vars
 load_dotenv(".env")
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+
+# os.environ['GOOGLE_API_KEY'] = os.getenv("GOOGLE_API_KEY")
 
 # langchain
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
@@ -60,7 +63,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # models
 # borrower
-class BORROWER(BaseModel):
+class _BORROWER(BaseModel):
     FirstName: str
     LastName: str
     BirthDate: str
@@ -72,7 +75,7 @@ class FACTOR(BaseModel):
 class POSITIVE_FACTOR(BaseModel):
     Code: str
     Text: str
-class CREDIT_SCORE(BaseModel):
+class _CREDIT_SCORE(BaseModel):
     Date: str
     Value: str
     CreditRepositorySourceType: str
@@ -85,7 +88,7 @@ class CREDIT_SCORE(BaseModel):
 # credit inquiry
 class CREDIT_REPOSITORY(BaseModel):
     SourceType: str
-class CREDIT_INQUIRY(BaseModel):
+class _CREDIT_INQUIRY(BaseModel):
     Date: str
     Name: str
     RawIndustryText: str
@@ -104,9 +107,9 @@ class CREDIT_SUMMARY(BaseModel):
 class CreditRequest(BaseModel):
     USER_ID: str
     API_KEY: str
-    BORROWER: Optional[BORROWER]	
-    CREDIT_SCORE:list[CREDIT_SCORE]
-    CREDIT_INQUIRY: list[CREDIT_INQUIRY]
+    BORROWER: Optional[_BORROWER]
+    CREDIT_SCORE: Optional[list[_CREDIT_SCORE]] = None
+    CREDIT_INQUIRY: Optional[list[_CREDIT_INQUIRY]] = None
     CREDIT_SUMMARY_EFX: Optional[CREDIT_SUMMARY] = None #Equifax
     CREDIT_SUMMARY_TUI: Optional[CREDIT_SUMMARY] = None #TransUnion
     CREDIT_SUMMARY_XPN: Optional[CREDIT_SUMMARY] = None #Experian
@@ -118,7 +121,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
             raise HTTPException(status_code=400, detail="Api key dont match")
         documents = []
          # load personal data
-        if not historic_credit.BORROWER.FirstName is None:
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.FirstName is None:
             documents.append(
                 Document(
                     page_content= f"My firstName: {historic_credit.BORROWER.FirstName}",
@@ -126,7 +129,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     id="FirstName",
                 )
             )
-        if not historic_credit.BORROWER.LastName is None:
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.LastName is None:
             documents.append(
                 Document(
                     page_content= f"My lastName: {historic_credit.BORROWER.LastName}",
@@ -201,7 +204,12 @@ async def query(query_request:QueryRequest):
         search_type="similarity_score_threshold", 
         search_kwargs={"score_threshold": 0.2, "k": 20, "filter": {"user_id": query_request.user_id} }
     )
-    llm = ChatOpenAI()
+    # llm = ChatGoogleGenerativeAI(
+    #     model="gemini-2.5-pro",
+    #     temperature=0,
+    # )
+    llm = ChatOpenAI(model="gpt-3.5-turbo")
+
     system_prompt = (
         f"Work as an assistant about credit to myself"
         "Use the given context to answer the question. "
@@ -218,7 +226,22 @@ async def query(query_request:QueryRequest):
     )
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
-    return chain.invoke({"input": query_request.query}).answer
+    response = chain.invoke({"input": query_request.query})
+    return {
+        'answer': response['answer'],
+    }
+
+class DeleteUserCreditDataRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+
+# endpoint to delete user credit data
+@app.delete("/delete-user-credit-data")
+async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    vector_store.delete(where={"user_id": request.user_id})
+    return "ok"
 
 if __name__=="__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
