@@ -65,14 +65,12 @@ async def global_exception_handler(request: Request, exc: Exception):
 # borrower
 class _BORROWER(BaseModel):
     FirstName: str
-    LastName: str
-    BirthDate: str
 
 # credit score
-class FACTOR(BaseModel):
+class _FACTOR(BaseModel):
     Code: str
     Text: str
-class POSITIVE_FACTOR(BaseModel):
+class _POSITIVE_FACTOR(BaseModel):
     Code: str
     Text: str
 class _CREDIT_SCORE(BaseModel):
@@ -82,8 +80,8 @@ class _CREDIT_SCORE(BaseModel):
     RiskBasedPricingMax: str
     RiskBasedPricingMin: str
     RiskBasedPricingPercent: str
-    FACTOR: list[FACTOR]
-    POSITIVE_FACTOR: list[POSITIVE_FACTOR]
+    FACTOR: Optional[list[_FACTOR]] = None
+    POSITIVE_FACTOR: Optional[list[_POSITIVE_FACTOR]] = None
 
 # credit inquiry
 class CREDIT_REPOSITORY(BaseModel):
@@ -107,7 +105,7 @@ class CREDIT_SUMMARY(BaseModel):
 class CreditRequest(BaseModel):
     USER_ID: str
     API_KEY: str
-    BORROWER: Optional[_BORROWER]
+    BORROWER: Optional[_BORROWER] = None
     CREDIT_SCORE: Optional[list[_CREDIT_SCORE]] = None
     CREDIT_INQUIRY: Optional[list[_CREDIT_INQUIRY]] = None
     CREDIT_SUMMARY_EFX: Optional[CREDIT_SUMMARY] = None #Equifax
@@ -129,41 +127,34 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     id="FirstName",
                 )
             )
-        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.LastName is None:
-            documents.append(
-                Document(
-                    page_content= f"My lastName: {historic_credit.BORROWER.LastName}",
-                    metadata={"field": "LastName", "source": "Personal Info", "user_id": historic_credit.USER_ID},
-                    id='LastName',
-                )
-            )
+ 
         # load credit inquiry
         if not historic_credit.CREDIT_INQUIRY is None:
             for i in historic_credit.CREDIT_INQUIRY:
                 documents.append(Document(
-                    page_content= f"Inquiry: {i.Name}; From credit car: {i.CREDIT_REPOSITORY.SourceType}; Date: {i.Date}",
-                    metadata={"source": "CreditInquiry", "credit_card": i.CREDIT_REPOSITORY.SourceType, "date": i.Date, "user_id": historic_credit.USER_ID},
+                    page_content= f"Inquiry: {i.Name}; From Credit Repository: {i.CREDIT_REPOSITORY.SourceType}; Date: {i.Date}",
+                    metadata={"source": "CreditInquiry", "credit_repository": i.CREDIT_REPOSITORY.SourceType, "date": i.Date, "user_id": historic_credit.USER_ID},
                     id=i.CreditInquiryID,
                 ))
         # load credit summary
         if not historic_credit.CREDIT_SUMMARY_EFX is None:
             for i in historic_credit.CREDIT_SUMMARY_EFX.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From credit Card: Equifax",
+                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: Equifax",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_TUI is None:
             for i in historic_credit.CREDIT_SUMMARY_TUI.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From credit Card: TransUnion",
+                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: TransUnion",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_XPN is None:
             for i in historic_credit.CREDIT_SUMMARY_XPN.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From credit Card: Experian",
+                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: Experian",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
@@ -171,20 +162,27 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         # load credit score
         if not historic_credit.CREDIT_SCORE is None:
             for i in historic_credit.CREDIT_SCORE:
-                credit_card = i.CreditRepositorySourceType
+                credit_repository = i.CreditRepositorySourceType
                 date_of_credit_score = i.Date
-                for j in i.FACTOR:
-                    documents.append(Document(
-                        page_content= f"Credit Score Factor ({date_of_credit_score}):  {j.Text}. From Credit Card: {credit_card}",
-                        metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID },
-                        id=j.Code,
-                    ))
-                for j in i.POSITIVE_FACTOR:
-                    documents.append(Document(
-                        page_content= f"Credit Score Positive Factor ({date_of_credit_score}):  {j.Text}. From Credit Card: {credit_card}",
-                        metadata={"source": "CreditScore", "field": "positive_factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID },
-                        id=j.Code,
-                    ))
+                documents.append(Document(
+                            page_content= f"Credit Score: Value on {date_of_credit_score}:  {i.Value}. From Credit Repository: {credit_repository}",
+                            metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
+                            id=i.Date,
+                        ))
+                if not i.FACTOR is None:
+                    for j in i.FACTOR:
+                        documents.append(Document(
+                            page_content= f"Credit Score: Negative Factor ({date_of_credit_score}):  {j.Text}. From Credit Repository: {credit_repository}",
+                            metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
+                            id=j.Code,
+                        ))
+                if not i.POSITIVE_FACTOR is None:
+                    for j in i.POSITIVE_FACTOR:
+                        documents.append(Document(
+                            page_content= f"Credit Score: Positive Factor ({date_of_credit_score}):  {j.Text}. From Credit Repository: {credit_repository}",
+                            metadata={"source": "CreditScore", "field": "positive_factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
+                            id=j.Code,
+                        ))
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
@@ -211,11 +209,16 @@ async def query(query_request:QueryRequest):
     llm = ChatOpenAI(model="gpt-3.5-turbo")
 
     system_prompt = (
-        f"Work as an assistant about credit to myself"
+        f"Work as an assistant about credit to myself. "
         "Use the given context to answer the question. "
         "If you don't know the answer, say you don't know. "
+        "Don't give me any advice. "
+        "Don't tell me how to repair credit. "
+        "Don't tell me how to improve my credit score. "
+        "Don't tell me how to write a letter to a collection agency. "
+        "Don't answer questions that are not related to credit. "
         "keep the answer concise. "
-        "Only respond with the data and some concept if it necesary, dont give advice."
+        "Only respond with the data and some concept related to credit if it necesary. "
         "Context: {context}"
     )
     prompt = ChatPromptTemplate.from_messages(
