@@ -12,7 +12,7 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Union
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import uvicorn 
@@ -101,6 +101,30 @@ class DATA_SET_SUMMARY(BaseModel):
 class CREDIT_SUMMARY(BaseModel):
     DATA_SET: list[DATA_SET_SUMMARY]
 
+# credit liability
+class _CREDITOR(BaseModel):
+    Name: str
+
+class _PAYMENT_PATTERN(BaseModel):
+    StartDate: str
+
+class _HIGHEST_ADVERSE_RATING(BaseModel):
+    Type: str
+
+class _CREDIT_LIABILITY(BaseModel):
+    CreditLiabilityID: str
+    OriginalBalanceAmount: Optional[str] = None
+    UnpaidBalanceAmount: Optional[str] = None
+    MonthlyPaymentAmount: Optional[str] = None
+    TermsMonthsCount: Optional[str] = None
+    MonthsReviewedCount: Optional[str] = None
+    CreditLoanType: Optional[str] = None
+    CREDITOR: _CREDITOR 
+    PAYMENT_PATTERN: _PAYMENT_PATTERN
+    TermsDescription: Optional[str] = None
+    CREDIT_REPOSITORY: Union[CREDIT_REPOSITORY, list[CREDIT_REPOSITORY]] 
+    HIGHEST_ADVERSE_RATING: Optional[_HIGHEST_ADVERSE_RATING] = None
+
 # request
 class CreditRequest(BaseModel):
     USER_ID: str
@@ -108,6 +132,7 @@ class CreditRequest(BaseModel):
     BORROWER: Optional[_BORROWER] = None
     CREDIT_SCORE: Optional[list[_CREDIT_SCORE]] = None
     CREDIT_INQUIRY: Optional[list[_CREDIT_INQUIRY]] = None
+    CREDIT_LIABILITY: Optional[list[_CREDIT_LIABILITY]] = None
     CREDIT_SUMMARY_EFX: Optional[CREDIT_SUMMARY] = None #Equifax
     CREDIT_SUMMARY_TUI: Optional[CREDIT_SUMMARY] = None #TransUnion
     CREDIT_SUMMARY_XPN: Optional[CREDIT_SUMMARY] = None #Experian
@@ -183,15 +208,56 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                             metadata={"source": "CreditScore", "field": "positive_factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=j.Code,
                         ))
+
+        # load credit liability 
+        if not historic_credit.CREDIT_LIABILITY is None:
+            for liability in historic_credit.CREDIT_LIABILITY:
+                content = f"Credit Loan: "
+                content += f"Credit Loan Type: {liability.CreditLoanType}"
+                content += f"To Creditor: {liability.CREDITOR.Name}. "
+                if not liability.PAYMENT_PATTERN.StartDate is None:
+                    content += f"Start date: {liability.PAYMENT_PATTERN.StartDate}. "
+                if not liability.OriginalBalanceAmount is None:
+                    content += f"Original amount to pay: {liability.OriginalBalanceAmount}. "
+                if not liability.UnpaidBalanceAmount is None:
+                    content += f"Amount remaining to be paid: {liability.UnpaidBalanceAmount}. "
+                
+                if not liability.TermsMonthsCount is None:
+                    content += f"Total months to pay: {liability.TermsMonthsCount}. "
+                elif not liability.TermsDescription is None:
+                    content += f"Months/payment description: {liability.TermsDescription}. "
+                
+                if not liability.MonthsReviewedCount is None:
+                    content += f"Months paid so far: {liability.MonthsReviewedCount}. "
+                if not liability.HIGHEST_ADVERSE_RATING is None:
+                    content += f"Late payment: {liability.HIGHEST_ADVERSE_RATING.Type}. "
+                if isinstance(liability.CREDIT_REPOSITORY, list):
+                    content += f"From Credit Repository: "
+                    for repo in liability.CREDIT_REPOSITORY:
+                        content += f"{repo.SourceType}, "
+                    content += ". "
+                else:
+                    content += f"From Credit Repository: {liability.CREDIT_REPOSITORY.SourceType}. "
+
+                documents.append(Document(
+                    page_content= content,
+                    metadata={"source": "CreditLiability", "field": "liability", "date": liability.PAYMENT_PATTERN.StartDate, "user_id": historic_credit.USER_ID },
+                    id=liability.CreditLiabilityID,
+                ))
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
   
 # model
+class Message(BaseModel):
+    input: Optional[str] = None
+    output: Optional[str] = None
+
 class QueryRequest(BaseModel):
     API_KEY: str
     user_id: str
     query: str
+    last_messages: Optional[list[Message]] = None
 
 # endpoint to retrieve an answer
 @app.post("/query")
@@ -206,7 +272,12 @@ async def query(query_request:QueryRequest):
     #     model="gemini-2.5-pro",
     #     temperature=0,
     # )
-    llm = ChatOpenAI(model="gpt-3.5-turbo")
+    
+    memory = "\n".join(
+        [f"User: {m.input}\nAssistant: {m.output}" for m in query_request.last_messages]
+    )
+
+    llm = ChatOpenAI()
 
     system_prompt = (
         f"Work as an assistant about credit to myself. "
@@ -219,7 +290,8 @@ async def query(query_request:QueryRequest):
         "Don't answer questions that are not related to credit. "
         "keep the answer concise. "
         "Only respond with the data and some concept related to credit if it necesary. "
-        "Context: {context}"
+        "Previous Messages: " + memory + "\n"
+        "Context: {context} "
     )
     prompt = ChatPromptTemplate.from_messages(
         [
