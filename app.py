@@ -87,7 +87,7 @@ class _CREDIT_SCORE(BaseModel):
 class CREDIT_REPOSITORY(BaseModel):
     SourceType: str
 class _CREDIT_INQUIRY(BaseModel):
-    PurposeType: str
+    PurposeType: Optional[str] = None
     Date: str
     Name: str
     RawIndustryText: str
@@ -158,7 +158,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if not historic_credit.CREDIT_INQUIRY is None:
             for i in historic_credit.CREDIT_INQUIRY:
                 documents.append(Document(
-                    page_content= f"Consulta: {i.Name}; Tipo de Consulta: {i.PurposeType}; Buro de Credito: {i.CREDIT_REPOSITORY.SourceType}; Fecha: {i.Date}",
+                    page_content= f"Consulta: {i.Name}; Tipo de Consulta: {i.PurposeType or "Desconocida"}; Buro de Credito: {i.CREDIT_REPOSITORY.SourceType}; Fecha: {i.Date}",
                     metadata={"source": "CreditInquiry", "credit_repository": i.CREDIT_REPOSITORY.SourceType, "date": i.Date, "user_id": historic_credit.USER_ID},
                     id=i.CreditInquiryID,
                 ))
