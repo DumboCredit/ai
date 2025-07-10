@@ -87,6 +87,7 @@ class _CREDIT_SCORE(BaseModel):
 class CREDIT_REPOSITORY(BaseModel):
     SourceType: str
 class _CREDIT_INQUIRY(BaseModel):
+    PurposeType: str
     Date: str
     Name: str
     RawIndustryText: str
@@ -147,7 +148,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if not historic_credit.BORROWER is None and not historic_credit.BORROWER.FirstName is None:
             documents.append(
                 Document(
-                    page_content= f"My firstName: {historic_credit.BORROWER.FirstName}",
+                    page_content= f"Mi primer nombre es: {historic_credit.BORROWER.FirstName}",
                     metadata={"field": "FirstName", "source": "Personal Info", "user_id": historic_credit.USER_ID },
                     id="FirstName",
                 )
@@ -157,7 +158,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if not historic_credit.CREDIT_INQUIRY is None:
             for i in historic_credit.CREDIT_INQUIRY:
                 documents.append(Document(
-                    page_content= f"Inquiry: {i.Name}; From Credit Repository: {i.CREDIT_REPOSITORY.SourceType}; Date: {i.Date}",
+                    page_content= f"Consulta: {i.Name}; Tipo de Consulta: {i.PurposeType}; Buro de Credito: {i.CREDIT_REPOSITORY.SourceType}; Fecha: {i.Date}",
                     metadata={"source": "CreditInquiry", "credit_repository": i.CREDIT_REPOSITORY.SourceType, "date": i.Date, "user_id": historic_credit.USER_ID},
                     id=i.CreditInquiryID,
                 ))
@@ -165,21 +166,21 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if not historic_credit.CREDIT_SUMMARY_EFX is None:
             for i in historic_credit.CREDIT_SUMMARY_EFX.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: Equifax",
+                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: Equifax",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_TUI is None:
             for i in historic_credit.CREDIT_SUMMARY_TUI.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: TransUnion",
+                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: TransUnion",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_XPN is None:
             for i in historic_credit.CREDIT_SUMMARY_XPN.DATA_SET:
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. From Credit Repository: Experian",
+                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: Experian",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
@@ -190,21 +191,21 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                 credit_repository = i.CreditRepositorySourceType
                 date_of_credit_score = i.Date
                 documents.append(Document(
-                            page_content= f"Credit Score: Value on {date_of_credit_score}:  {i.Value}. From Credit Repository: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value}. Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=i.Date,
                         ))
                 if not i.FACTOR is None:
                     for j in i.FACTOR:
                         documents.append(Document(
-                            page_content= f"Credit Score: Negative Factor ({date_of_credit_score}):  {j.Text}. From Credit Repository: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Factor Negativo ({date_of_credit_score}):  {j.Text}. Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=j.Code,
                         ))
                 if not i.POSITIVE_FACTOR is None:
                     for j in i.POSITIVE_FACTOR:
                         documents.append(Document(
-                            page_content= f"Credit Score: Positive Factor ({date_of_credit_score}):  {j.Text}. From Credit Repository: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Factor Positivo ({date_of_credit_score}):  {j.Text}. Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "positive_factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=j.Code,
                         ))
@@ -212,38 +213,39 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         # load credit liability 
         if not historic_credit.CREDIT_LIABILITY is None:
             for liability in historic_credit.CREDIT_LIABILITY:
-                content = f"Credit Loan: "
-                content += f"Credit Loan Type: {liability.CreditLoanType}"
-                content += f"To Creditor: {liability.CREDITOR.Name}. "
+                content = f"Deuda de Credito: "
+                content += f"Tipo de Prestamo: {liability.CreditLoanType}"
+                content += f"A Credor: {liability.CREDITOR.Name}. "
                 if not liability.PAYMENT_PATTERN.StartDate is None:
-                    content += f"Start date: {liability.PAYMENT_PATTERN.StartDate}. "
+                    content += f"Fecha de inicio: {liability.PAYMENT_PATTERN.StartDate}. "
                 if not liability.OriginalBalanceAmount is None:
-                    content += f"Original amount to pay: {liability.OriginalBalanceAmount}. "
+                    content += f"Monto original a pagar: {liability.OriginalBalanceAmount}. "
                 if not liability.UnpaidBalanceAmount is None:
-                    content += f"Amount remaining to be paid: {liability.UnpaidBalanceAmount}. "
+                    content += f"Monto restante a pagar: {liability.UnpaidBalanceAmount}. "
                 
                 if not liability.TermsMonthsCount is None:
-                    content += f"Total months to pay: {liability.TermsMonthsCount}. "
+                    content += f"Total de meses a pagar: {liability.TermsMonthsCount}. "
                 elif not liability.TermsDescription is None:
-                    content += f"Months/payment description: {liability.TermsDescription}. "
+                    content += f"Meses/descripcion de pago: {liability.TermsDescription}. "
                 
                 if not liability.MonthsReviewedCount is None:
-                    content += f"Months paid so far: {liability.MonthsReviewedCount}. "
+                    content += f"Meses pagados hasta la fecha: {liability.MonthsReviewedCount}. "
                 if not liability.HIGHEST_ADVERSE_RATING is None:
-                    content += f"Late payment: {liability.HIGHEST_ADVERSE_RATING.Type}. "
+                    content += f"Pago atrasado: {liability.HIGHEST_ADVERSE_RATING.Type}. "
                 if isinstance(liability.CREDIT_REPOSITORY, list):
-                    content += f"From Credit Repository: "
+                    content += f"Buro de Credito: "
                     for repo in liability.CREDIT_REPOSITORY:
                         content += f"{repo.SourceType}, "
                     content += ". "
                 else:
-                    content += f"From Credit Repository: {liability.CREDIT_REPOSITORY.SourceType}. "
+                    content += f"Buro de Credito: {liability.CREDIT_REPOSITORY.SourceType}. "
 
                 documents.append(Document(
                     page_content= content,
                     metadata={"source": "CreditLiability", "field": "liability", "date": liability.PAYMENT_PATTERN.StartDate, "user_id": historic_credit.USER_ID },
                     id=liability.CreditLiabilityID,
                 ))
+
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
@@ -266,7 +268,7 @@ async def query(query_request:QueryRequest):
         raise HTTPException(status_code=400, detail="Api key dont match")
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
-        search_kwargs={"score_threshold": 0.2, "k": 20, "filter": {"user_id": query_request.user_id} }
+        search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     # llm = ChatGoogleGenerativeAI(
     #     model="gemini-2.5-pro",
@@ -274,24 +276,25 @@ async def query(query_request:QueryRequest):
     # )
     
     memory = "\n".join(
-        [f"User: {m.input}\nAssistant: {m.output}" for m in query_request.last_messages]
+        [f"User: {m.input};Assistant: {m.output}. " for m in query_request.last_messages]
     )
 
     llm = ChatOpenAI()
 
     system_prompt = (
-        f"Work as an assistant about credit to myself. "
-        "Use the given context to answer the question. "
-        "If you don't know the answer, say you don't know. "
-        "Don't give me any advice. "
-        "Don't tell me how to repair credit. "
-        "Don't tell me how to improve my credit score. "
-        "Don't tell me how to write a letter to a collection agency. "
-        "Don't answer questions that are not related to credit. "
-        "keep the answer concise. "
-        "Only respond with the data and some concept related to credit if it necesary. "
-        "Previous Messages: " + memory + "\n"
-        "Context: {context} "
+        f"Eres un asistente inteligente dentro de Dumbo Credit."
+        "Usa el contexto dado para responder la pregunta. "
+        "Si no sabes la respuesta, di que no lo sabes. "
+        "Tu única función es ayudar a los usuarios a entender su reporte de crédito y responder preguntas relacionadas con su historial, cuentas, puntaje y datos generales. "
+        "No das consejos legales ni ayudas a disputar ni reparar crédito. "
+        "Usa un tono profesional pero amigable."
+        "Siempre en español claro y sencillo pero con una respuesta bien argumentada. "
+        "No uses jerga financiera complicada. "
+        "Si una pregunta requiere acción o disputa, responde: En este momento no puedo ayudarte con disputas, pero puedo explicarte qué significa este dato y cómo impacta tu reporte. "
+        "Responde siempre que puedas dando datos del reporte de credito. "
+        "Si la pregunta es sobre dónde consultar un dato, explica cómo se puede obtener esa información en la vida real, como lo haría una persona fuera del sistema, sin mencionar detalles técnicos, archivos, JSON ni contexto interno."
+        "Mensajes Anteriores: " + memory + "."
+        "Contexto: {context} "
     )
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -332,6 +335,49 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
         raise HTTPException(status_code=400, detail="Api key dont match")
     vector_store.delete(where={"user_id": request.user_id})
     return "ok"
+
+def insert_general_knowledge():
+    try:
+        vector_store.delete(where={"source": "General Knowledge"})
+        documents = [
+            Document(
+                page_content= f"¿Dónde veo si tengo pagos atrasados?: En la sección de historial de pagos de cada cuenta verás los pagos mes a mes. Si hay un número como “30” o “60”, significa que hubo un pago atrasado de 30 o 60 días en ese mes. Si todo dice “OK”, significa que los pagos han sido puntuales.",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK1",
+            ),
+            Document(
+                page_content= f"¿Dónde puedo simular mi puntaje de credito?: En la sección de simulador de puntaje.",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK2",
+            ),
+            Document(
+                page_content= f"¿Como funciona el simulador de puntaje?: Simulador de Puntaje comienza con la información de su informe de crédito actual y analiza cómo el cambio de esa información podría afectar su puntuación. Por supuesto, todo es hipotético. En realidad, la simulación de estos cambios no afectará su puntaje ni su informe.",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK3",
+            ),
+            Document(
+                page_content= f"¿En que modelo de puntaje se base el simulador de credito?: Nuestra herramienta se basa en los puntajes de crédito de VantageScore® 3.0. Su puntaje siempre cambiará en función del modelo que utilice en ese momento.",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK4",
+            ),
+            Document(
+                page_content= f"¿Donde puedo aprender mas sobre credito?: Tenemos varios cursos en la plataforma para que puedas aprender mas sobre credito. Puede acceder a ellos en la sección de cursos disponible en el menu de usuario.",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK5",
+            ),
+            Document(
+                page_content= f"Rangos de puntaje de credito: 300-579: Muy bajo, 580-669: Regular, 670-739: Bueno, 740-799: Muy bueno, 800+: Excelente",
+                metadata={"field": "Website", "source": "General Knowledge" },
+                id="GK6",
+            ),
+        ]
+        uuids = [str(uuid4()) for _ in range(len(documents))]
+        vector_store.add_documents(documents=documents, ids=uuids)
+    except Exception as e:
+        print(e)
+
+
+insert_general_knowledge()
 
 if __name__=="__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
