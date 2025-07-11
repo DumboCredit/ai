@@ -7,7 +7,7 @@ from langchain_chroma import Chroma
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-# from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
@@ -17,12 +17,11 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 import uvicorn 
 import os
+import json
 
 # env vars
 load_dotenv(".env")
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
-
-# os.environ['GOOGLE_API_KEY'] = os.getenv("GOOGLE_API_KEY")
 
 # langchain
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
@@ -138,6 +137,51 @@ class CreditRequest(BaseModel):
     CREDIT_SUMMARY_TUI: Optional[CREDIT_SUMMARY] = None #TransUnion
     CREDIT_SUMMARY_XPN: Optional[CREDIT_SUMMARY] = None #Experian
 
+
+# load translations
+with open("translations.json", "r") as f:
+    translations = json.load(f)
+
+def get_translation(text: str) -> str:
+    if text in translations:
+        return translations[text]
+    else:
+        return text
+
+def get_credit_liability_total(prefix: str, loan_types: list[str], credit_repositories: list[str], historic_credit:CreditRequest) -> str:
+    total_content = f"{prefix} de cuentas de credito: "
+    filtered_liabilities = []
+    for liability in historic_credit.CREDIT_LIABILITY:
+        repo_match = False
+        if isinstance(liability.CREDIT_REPOSITORY, list):
+            repo_match = any(
+                getattr(repo, "SourceType", None) in credit_repositories
+                for repo in liability.CREDIT_REPOSITORY
+            )
+        else:
+            repo_match = getattr(liability.CREDIT_REPOSITORY, "SourceType", None) in credit_repositories
+        loan_type_match = getattr(liability, "CreditLoanType", None) in loan_types
+        if repo_match and loan_type_match:
+            filtered_liabilities.append(liability)
+
+    return f"{total_content} {len(filtered_liabilities)}"
+
+def get_credit_cards_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
+    desired_credit_loan_types = ["CreditCard", "ChargeAccount"]
+    return get_credit_liability_total("Numero de tarjetas de credito", desired_credit_loan_types, credit_repositories, historic_credit)
+
+def get_auto_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
+    desired_credit_loan_types = ["Automobile"]
+    return get_credit_liability_total("Numero de prestamos de auto", desired_credit_loan_types, credit_repositories, historic_credit)
+
+def get_education_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
+    desired_credit_loan_types = ["Educational"]
+    return get_credit_liability_total("Numero de prestamos estudiantiles", desired_credit_loan_types, credit_repositories, historic_credit)
+    
+def get_mortgage_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
+    desired_credit_loan_types = ["ConventionalRealEstateMortgage"]
+    return get_credit_liability_total("Numero de prestamos inmobiliarios", desired_credit_loan_types, credit_repositories, historic_credit)
+
 # routes
 @app.post("/add-user-credit-data")
 async def add_user_credit_data(historic_credit:CreditRequest):
@@ -165,22 +209,25 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         # load credit summary
         if not historic_credit.CREDIT_SUMMARY_EFX is None:
             for i in historic_credit.CREDIT_SUMMARY_EFX.DATA_SET:
+                translated_name = get_translation(i.Name)
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: Equifax",
+                    page_content= f"{translated_name}: {i.Value} en el Buro de Credito: Equifax",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_TUI is None:
             for i in historic_credit.CREDIT_SUMMARY_TUI.DATA_SET:
+                translated_name = get_translation(i.Name)
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: TransUnion",
+                    page_content= f"{translated_name}: {i.Value} en el Buro de Credito: TransUnion",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
         if not historic_credit.CREDIT_SUMMARY_XPN is None:
             for i in historic_credit.CREDIT_SUMMARY_XPN.DATA_SET:
+                translated_name = get_translation(i.Name)
                 documents.append(Document(
-                    page_content= f"{i.Name}: {i.Value}. Buro de Credito: Experian",
+                    page_content= f"{translated_name}: {i.Value} en el Buro de Credito: Experian",
                     metadata={"source": "CreditSummary", "user_id": historic_credit.USER_ID},
                     id=i.ID,
                 ))
@@ -191,31 +238,56 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                 credit_repository = i.CreditRepositorySourceType
                 date_of_credit_score = i.Date
                 documents.append(Document(
-                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value}. Buro de Credito: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value} en el Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=i.Date,
                         ))
                 if not i.FACTOR is None:
                     for j in i.FACTOR:
+                        translated_text = get_translation(j.Text)
                         documents.append(Document(
-                            page_content= f"Puntaje de Credito: Factor Negativo ({date_of_credit_score}):  {j.Text}. Buro de Credito: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Factor Negativo ({date_of_credit_score}):  {translated_text} en el Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=j.Code,
                         ))
                 if not i.POSITIVE_FACTOR is None:
                     for j in i.POSITIVE_FACTOR:
+                        translated_text = get_translation(j.Text)
                         documents.append(Document(
-                            page_content= f"Puntaje de Credito: Factor Positivo ({date_of_credit_score}):  {j.Text}. Buro de Credito: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Factor Positivo ({date_of_credit_score}):  {translated_text} en el Buro de Credito: {credit_repository}",
                             metadata={"source": "CreditScore", "field": "positive_factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=j.Code,
                         ))
 
         # load credit liability 
         if not historic_credit.CREDIT_LIABILITY is None:
+            for credit_repository in ["TransUnion", "Experian", "Equifax"]:
+                documents.append(Document(
+                    page_content= f"{get_credit_cards_content(historic_credit, [credit_repository])} en el Buro de Credito: {credit_repository}",
+                    metadata={"source": "CreditLiability", "field": "credit_cards", "user_id": historic_credit.USER_ID, "credit_repository": credit_repository },
+                    id="CreditCards",
+                ))
+                documents.append(Document(
+                    page_content= f"{get_auto_loans_content(historic_credit, [credit_repository])} en el Buro de Credito: {credit_repository}",
+                    metadata={"source": "CreditLiability", "field": "auto_loans", "user_id": historic_credit.USER_ID, "credit_repository": credit_repository },
+                    id="AutoLoans",
+                ))
+                documents.append(Document(
+                    page_content= f"{get_education_loans_content(historic_credit, [credit_repository])} en el Buro de Credito: {credit_repository}",
+                    metadata={"source": "CreditLiability", "field": "education_loans", "user_id": historic_credit.USER_ID, "credit_repository": credit_repository },
+                    id="EducationLoans",
+                ))
+                documents.append(Document(
+                    page_content= f"{get_mortgage_loans_content(historic_credit, [credit_repository])} en el Buro de Credito: {credit_repository}",
+                    metadata={"source": "CreditLiability", "field": "mortgage_loans", "user_id": historic_credit.USER_ID, "credit_repository": credit_repository },
+                    id="MortgageLoans",
+                ))
+
+
             for liability in historic_credit.CREDIT_LIABILITY:
-                content = f"Deuda de Credito: "
-                content += f"Tipo de Prestamo: {liability.CreditLoanType}"
-                content += f"A Credor: {liability.CREDITOR.Name}. "
+                translated_credit_loan_type = get_translation(liability.CreditLoanType)
+                content = f"{translated_credit_loan_type}"
+                content += f"con el Credor: {liability.CREDITOR.Name}. "
                 if not liability.PAYMENT_PATTERN.StartDate is None:
                     content += f"Fecha de inicio: {liability.PAYMENT_PATTERN.StartDate}. "
                 if not liability.OriginalBalanceAmount is None:
@@ -266,17 +338,14 @@ class QueryRequest(BaseModel):
 async def query(query_request:QueryRequest):
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+    
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
-    # llm = ChatGoogleGenerativeAI(
-    #     model="gemini-2.5-pro",
-    #     temperature=0,
-    # )
     
     memory = "\n".join(
-        [f"User: {m.input};Assistant: {m.output}. " for m in query_request.last_messages]
+        [f"Usuario: {m.input}\nAsistente: {m.output}" for m in query_request.last_messages]
     )
 
     llm = ChatOpenAI()
