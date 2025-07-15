@@ -11,12 +11,16 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, Union
+from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import uvicorn 
 import os
-import json
+from utils.get_liability_content import get_liability_content
+from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
+from utils.get_translation import get_translation
+from models import CreditRequest
+
 
 # env vars
 load_dotenv(".env")
@@ -59,127 +63,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# models
-# borrower
-class _BORROWER(BaseModel):
-    FirstName: str
-
-# credit score
-class _FACTOR(BaseModel):
-    Code: str
-    Text: str
-class _POSITIVE_FACTOR(BaseModel):
-    Code: str
-    Text: str
-class _CREDIT_SCORE(BaseModel):
-    Date: str
-    Value: str
-    CreditRepositorySourceType: str
-    RiskBasedPricingMax: str
-    RiskBasedPricingMin: str
-    RiskBasedPricingPercent: str
-    FACTOR: Optional[list[_FACTOR]] = None
-    POSITIVE_FACTOR: Optional[list[_POSITIVE_FACTOR]] = None
-
-# credit inquiry
-class CREDIT_REPOSITORY(BaseModel):
-    SourceType: str
-class _CREDIT_INQUIRY(BaseModel):
-    PurposeType: Optional[str] = None
-    Date: str
-    Name: str
-    RawIndustryText: str
-    CreditInquiryID: str
-    CREDIT_REPOSITORY: CREDIT_REPOSITORY
-
-# credit summary
-class DATA_SET_SUMMARY(BaseModel):
-    ID: str
-    Name: str
-    Value:str
-class CREDIT_SUMMARY(BaseModel):
-    DATA_SET: list[DATA_SET_SUMMARY]
-
-# credit liability
-class _CREDITOR(BaseModel):
-    Name: str
-
-class _PAYMENT_PATTERN(BaseModel):
-    StartDate: str
-
-class _HIGHEST_ADVERSE_RATING(BaseModel):
-    Type: str
-
-class _CREDIT_LIABILITY(BaseModel):
-    CreditLiabilityID: str
-    OriginalBalanceAmount: Optional[str] = None
-    UnpaidBalanceAmount: Optional[str] = None
-    MonthlyPaymentAmount: Optional[str] = None
-    TermsMonthsCount: Optional[str] = None
-    MonthsReviewedCount: Optional[str] = None
-    CreditLoanType: Optional[str] = None
-    CREDITOR: _CREDITOR 
-    PAYMENT_PATTERN: _PAYMENT_PATTERN
-    TermsDescription: Optional[str] = None
-    CREDIT_REPOSITORY: Union[CREDIT_REPOSITORY, list[CREDIT_REPOSITORY]] 
-    HIGHEST_ADVERSE_RATING: Optional[_HIGHEST_ADVERSE_RATING] = None
-
-# request
-class CreditRequest(BaseModel):
-    USER_ID: str
-    API_KEY: str
-    BORROWER: Optional[_BORROWER] = None
-    CREDIT_SCORE: Optional[list[_CREDIT_SCORE]] = None
-    CREDIT_INQUIRY: Optional[list[_CREDIT_INQUIRY]] = None
-    CREDIT_LIABILITY: Optional[list[_CREDIT_LIABILITY]] = None
-    CREDIT_SUMMARY_EFX: Optional[CREDIT_SUMMARY] = None #Equifax
-    CREDIT_SUMMARY_TUI: Optional[CREDIT_SUMMARY] = None #TransUnion
-    CREDIT_SUMMARY_XPN: Optional[CREDIT_SUMMARY] = None #Experian
-
-
-# load translations
-with open("translations.json", "r") as f:
-    translations = json.load(f)
-
-def get_translation(text: str) -> str:
-    if text in translations:
-        return translations[text]
-    else:
-        return text
-
-def get_credit_liability_total(prefix: str, loan_types: list[str], credit_repositories: list[str], historic_credit:CreditRequest) -> str:
-    total_content = f"{prefix} de cuentas de credito: "
-    filtered_liabilities = []
-    for liability in historic_credit.CREDIT_LIABILITY:
-        repo_match = False
-        if isinstance(liability.CREDIT_REPOSITORY, list):
-            repo_match = any(
-                getattr(repo, "SourceType", None) in credit_repositories
-                for repo in liability.CREDIT_REPOSITORY
-            )
-        else:
-            repo_match = getattr(liability.CREDIT_REPOSITORY, "SourceType", None) in credit_repositories
-        loan_type_match = getattr(liability, "CreditLoanType", None) in loan_types
-        if repo_match and loan_type_match:
-            filtered_liabilities.append(liability)
-
-    return f"{total_content} {len(filtered_liabilities)}"
-
-def get_credit_cards_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
-    desired_credit_loan_types = ["CreditCard", "ChargeAccount"]
-    return get_credit_liability_total("Numero de tarjetas de credito", desired_credit_loan_types, credit_repositories, historic_credit)
-
-def get_auto_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
-    desired_credit_loan_types = ["Automobile"]
-    return get_credit_liability_total("Numero de prestamos de auto", desired_credit_loan_types, credit_repositories, historic_credit)
-
-def get_education_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
-    desired_credit_loan_types = ["Educational"]
-    return get_credit_liability_total("Numero de prestamos estudiantiles", desired_credit_loan_types, credit_repositories, historic_credit)
-    
-def get_mortgage_loans_content(historic_credit:CreditRequest, credit_repositories: list[str]) -> str:
-    desired_credit_loan_types = ["ConventionalRealEstateMortgage"]
-    return get_credit_liability_total("Numero de prestamos inmobiliarios", desired_credit_loan_types, credit_repositories, historic_credit)
 
 # routes
 @app.post("/add-user-credit-data")
@@ -284,33 +167,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
 
 
             for liability in historic_credit.CREDIT_LIABILITY:
-                translated_credit_loan_type = get_translation(liability.CreditLoanType)
-                content = f"{translated_credit_loan_type}"
-                content += f"con el Credor: {liability.CREDITOR.Name}. "
-                if not liability.PAYMENT_PATTERN.StartDate is None:
-                    content += f"Fecha de inicio: {liability.PAYMENT_PATTERN.StartDate}. "
-                if not liability.OriginalBalanceAmount is None:
-                    content += f"Monto original a pagar: {liability.OriginalBalanceAmount}. "
-                if not liability.UnpaidBalanceAmount is None:
-                    content += f"Monto restante a pagar: {liability.UnpaidBalanceAmount}. "
-                
-                if not liability.TermsMonthsCount is None:
-                    content += f"Total de meses a pagar: {liability.TermsMonthsCount}. "
-                elif not liability.TermsDescription is None:
-                    content += f"Meses/descripcion de pago: {liability.TermsDescription}. "
-                
-                if not liability.MonthsReviewedCount is None:
-                    content += f"Meses pagados hasta la fecha: {liability.MonthsReviewedCount}. "
-                if not liability.HIGHEST_ADVERSE_RATING is None:
-                    content += f"Pago atrasado: {liability.HIGHEST_ADVERSE_RATING.Type}. "
-                if isinstance(liability.CREDIT_REPOSITORY, list):
-                    content += f"Buro de Credito: "
-                    for repo in liability.CREDIT_REPOSITORY:
-                        content += f"{repo.SourceType}, "
-                    content += ". "
-                else:
-                    content += f"Buro de Credito: {liability.CREDIT_REPOSITORY.SourceType}. "
-
+                content = get_liability_content(liability)
                 documents.append(Document(
                     page_content= content,
                     metadata={"source": "CreditLiability", "field": "liability", "date": liability.PAYMENT_PATTERN.StartDate, "user_id": historic_credit.USER_ID },
@@ -358,6 +215,9 @@ async def query(query_request:QueryRequest):
         "Usa un tono profesional pero amigable."
         "Siempre en español claro y sencillo pero con una respuesta bien argumentada. "
         "No uses jerga financiera complicada. "
+        "Siempre que puedas, responde diferenciando la información por cada buró: TransUnion, Equifax y Experian. "
+        "Los datos no se suman entre los burós, ya que la misma tarjeta de crédito u otra cuenta puede estar reportada en los tres burós al mismo tiempo, y lo mismo aplica para otros datos. "
+        "Una misma cuenta puede aparecer en los tres reportes, pero no es que sean cuentas diferentes ni que se sumen los montos. "
         "Si una pregunta requiere acción o disputa, responde: En este momento no puedo ayudarte con disputas, pero puedo explicarte qué significa este dato y cómo impacta tu reporte. "
         "Responde siempre que puedas dando datos del reporte de credito. "
         "Si la pregunta es sobre dónde consultar un dato, explica cómo se puede obtener esa información en la vida real, como lo haría una persona fuera del sistema, sin mencionar detalles técnicos, archivos, JSON ni contexto interno."
