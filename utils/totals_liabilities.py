@@ -12,7 +12,6 @@ def get_credit_liability_total(prefix: str, loan_types: list[str], credit_reposi
         loan_type_match = getattr(liability, "CreditLoanType", None) in loan_types
         if repo_match and loan_type_match:
             total+=1
-        print(liability.CreditLoanType, total, credit_repositories,liability.CREDIT_REPOSITORY )
 
     return f"{total_content} {total}"
 

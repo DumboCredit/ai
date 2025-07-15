@@ -12,11 +12,13 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
     """Summary of the liability account"""
     isCreditCard = libCC.CreditLoanType == "CreditCard" or libCC.CreditLoanType == "ChargeAccount"
     translated_credit_loan_type = get_translation(libCC.CreditLoanType)
-    content = f"{translated_credit_loan_type}: "
+    content = f"{translated_credit_loan_type or "Otro prestamo"}: "
     if libCC.UnpaidBalanceAmount:
         content += f"Saldo: {libCC.UnpaidBalanceAmount}. "
     if not isCreditCard and libCC.UnpaidBalanceAmount:
-        content += f"Queda el: {(float(libCC.UnpaidBalanceAmount)/float(libCC.OriginalBalanceAmount or libCC.HighCreditAmount or libCC.UnpaidBalanceAmount)) *100}% para pagar de este prestamo"
+        base_amount = float(libCC.OriginalBalanceAmount or libCC.HighCreditAmount or libCC.UnpaidBalanceAmount)
+        if base_amount != 0:
+            content += f"Queda el: {(float(libCC.UnpaidBalanceAmount)/base_amount) *100}% para pagar de este prestamo"
     if not libCC.CreditLimitAmount is None:
         content += f"Limite crediticio: {libCC.CreditLimitAmount}. "
     if not libCC.LATE_COUNT is None:
