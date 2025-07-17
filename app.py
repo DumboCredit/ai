@@ -237,7 +237,7 @@ async def query(query_request:QueryRequest):
         "Si una pregunta requiere acción o disputa, responde solamente, sin dar consejos legales ni ayudas a disputar ni reparar crédito: En este momento no puedo ayudarte con disputas, pero puedo explicarte qué significa tus datos y cómo impactan en tu reporte. "
         "No respondas preguntas que no sean relacionadas con el credito. "
         "No respondas preguntas sobre como reparar el credito, solo responde que no puedo ayudarte con eso. "
-        "No respondas preguntas sobre como mejorar el puntaje, solo responde que no puedo ayudarte con eso. "
+        "No respondas preguntas sobre como mejorar el puntaje, como hacer mi puntaje mejor, como convertirlo a excelente, bueno, regular, etc. Solo responde que no puedo ayudarte con eso. "
         "No respondas preguntas sobre como hacer cartas de disputa, su estructura, la información que debe contener, etc. "
         "Responde siempre que puedas dando datos del reporte de credito. "
         "Si la pregunta es sobre dónde consultar un dato, explica cómo se puede obtener esa información en la vida real, como lo haría una persona fuera del sistema, sin mencionar detalles técnicos, archivos, JSON ni contexto interno."
