@@ -23,7 +23,7 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
         content += f"Limite crediticio: {libCC.CreditLimitAmount}. "
     if not libCC.LATE_COUNT is None:
         content += f"Pagos atrasados: {get_late_payments(libCC)}. "
-        content += f"Pagos atr  asados por 30 dias: {libCC.LATE_COUNT.Days30}. "
+        content += f"Pagos atrasados por 30 dias: {libCC.LATE_COUNT.Days30}. "
         content += f"Pagos atrasados por 60 dias: {libCC.LATE_COUNT.Days60}. "
         content += f"Pagos atrasados por 90 dias: {libCC.LATE_COUNT.Days90}. "
     if not libCC.MonthsReviewedCount is None:
