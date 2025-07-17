@@ -20,6 +20,7 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from models import CreditRequest
+from utils.get_score_rating import get_score_rating
 
 
 # env vars
@@ -120,7 +121,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                 credit_repository = i.CreditRepositorySourceType
                 date_of_credit_score = i.Date
                 documents.append(Document(
-                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value} en el Buro de Credito: {credit_repository}",
+                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value} en el Buro de Credito: {credit_repository}, clasificacion: {get_score_rating(i.Value)}",
                             metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
                             id=i.Date,
                         ))
@@ -189,6 +190,20 @@ class QueryRequest(BaseModel):
     query: str
     last_messages: Optional[list[Message]] = None
 
+from typing import List
+
+from langchain_core.documents import Document
+from langchain_core.runnables import chain
+
+
+@chain
+def retriever_with_score(query: str, user_id: str) -> List[Document]:
+    docs, scores = zip(*vector_store.similarity_search_with_score(query, k=30, filter={'$or':[{"user_id": user_id}, {"source": "General Knowledge"}]}))
+    for doc, score in zip(docs, scores):
+        doc.metadata["score"] = score
+
+    return docs
+
 # endpoint to retrieve an answer
 @app.post("/query")
 async def query(query_request:QueryRequest):
@@ -218,6 +233,7 @@ async def query(query_request:QueryRequest):
         "Siempre que puedas, responde diferenciando la información por cada buró: TransUnion, Equifax y Experian. "
         "Los datos no se suman entre los burós, ya que la misma tarjeta de crédito u otra cuenta puede estar reportada en los tres burós al mismo tiempo, y lo mismo aplica para otros datos. "
         "Una misma cuenta puede aparecer en los tres reportes, pero no es que sean cuentas diferentes ni que se sumen los montos. "
+        "Para responder sobre el puntaje ten en cuenta siempre esta unica escala de puntaje, no otra, la escala es: de 300 hasta 579 para Muy bajo, de 580 hasta 669 para Regular, de 670 hasta 739 para Bueno, de 740 hasta 799 para Muy bueno, y de 800 en adelante para Excelente. "
         "Si una pregunta requiere acción o disputa, responde solamente, sin dar consejos legales ni ayudas a disputar ni reparar crédito: En este momento no puedo ayudarte con disputas, pero puedo explicarte qué significa tus datos y cómo impactan en tu reporte. "
         "No respondas preguntas que no sean relacionadas con el credito. "
         "No respondas preguntas sobre como reparar el credito, solo responde que no puedo ayudarte con eso. "
@@ -236,8 +252,10 @@ async def query(query_request:QueryRequest):
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
     response = chain.invoke({"input": query_request.query})
+    docs = retriever_with_score.invoke(query_request.query, user_id=query_request.user_id)
     return {
         'answer': response['answer'],
+        'response_with_score': docs
     }
 
 # endpoint for knowing when user is on db
