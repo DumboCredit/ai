@@ -215,10 +215,6 @@ async def query(query_request:QueryRequest):
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     
-    memory = "\n".join(
-        [f"Usuario: {m.input}\nAsistente: {m.output}" for m in query_request.last_messages]
-    )
-
     llm = ChatOpenAI()
 
     system_prompt = (
@@ -237,26 +233,29 @@ async def query(query_request:QueryRequest):
         "Si una pregunta requiere acción o disputa, responde solamente, sin dar consejos legales ni ayudas a disputar ni reparar crédito: En este momento no puedo ayudarte con disputas, pero puedo explicarte qué significa tus datos y cómo impactan en tu reporte. "
         "No respondas preguntas que no sean relacionadas con el credito. "
         "No respondas preguntas sobre como reparar el credito, solo responde que no puedo ayudarte con eso. "
-        "No respondas preguntas sobre como mejorar el puntaje, ni ningun consejo acerca de como aumentar ni llevar de una calificacion a otra mi puntaje, ni como hacer mi puntaje mejor, ni como convertir mi puntaje a excelente, bueno, regular, etc. Solo responde que no puedo ayudarte con eso. "
+        "No respondas preguntas sobre como mejorar el puntaje. "
+        "No des ningun consejo o instruccion acerca de como aumentar ni llevar de una calificacion a otra el puntaje. " 
+        "No respondas como convertir el puntaje a excelente, bueno, regular, etc. "
         "No respondas preguntas sobre como hacer cartas de disputa, su estructura, la información que debe contener, etc. "
         "Responde siempre que puedas dando datos del reporte de credito. "
         "Si la pregunta es sobre dónde consultar un dato, explica cómo se puede obtener esa información en la vida real, como lo haría una persona fuera del sistema, sin mencionar detalles técnicos, archivos, JSON ni contexto interno."
-        "Mensajes Anteriores: " + memory + "."
         "Contexto: {context} "
     )
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_prompt),
-            ("human", "{input}"),
-        ]
-    )
+
+    memory = [("system", system_prompt)] 
+    
+    for m in query_request.last_messages:
+        memory.append(("human", m.input))
+        memory.append(("ai", m.output))
+
+    memory.append(("human", "{input}"))
+
+    prompt = ChatPromptTemplate(memory)
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
     response = chain.invoke({"input": query_request.query})
-    docs = retriever_with_score.invoke(query_request.query, user_id=query_request.user_id)
     return {
         'answer': response['answer'],
-        'response_with_score': docs
     }
 
 # endpoint for knowing when user is on db
