@@ -7,13 +7,15 @@ from langchain_chroma import Chroma
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
+from langchain.schema.messages import HumanMessage, SystemMessage
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from enum import Enum
+from pydantic import BaseModel, Field
 import uvicorn 
 import os
 from utils.get_liability_content import get_liability_content
@@ -258,6 +260,55 @@ async def query(query_request:QueryRequest):
         'answer': response['answer'],
     }
 
+@app.post("/query-without-limits")
+async def query_without_limits(query_request:QueryRequest):
+    if os.getenv("API_KEY") != query_request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    
+    retriever = vector_store.as_retriever(
+        search_type="similarity_score_threshold", 
+        search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
+    )
+    
+    llm = ChatOpenAI()
+
+    system_prompt = (
+        f"Eres un asistente inteligente dentro de Dumbo Credit."
+        "Usa el contexto dado para responder la pregunta. "
+        "Si no sabes la respuesta, di que no lo sabes. "
+        "Tu única función es ayudar a los usuarios a entender su reporte de crédito y responder preguntas relacionadas con su historial, cuentas, puntaje y datos generales. "
+        "Puedes ayudar al usuario a elavorar una carta de disputa, su estructura, la información que debe contener, etc. "
+        "Puedes darle consejos sobre como mejorar el puntaje, como aumentar el puntaje, como llevar de una calificacion a otra el puntaje, etc. "
+        "Usa un tono profesional pero amigable."
+        "Siempre en español claro y sencillo pero con una respuesta bien argumentada. "
+        "No uses jerga financiera complicada. "
+        "Siempre que puedas, responde diferenciando la información por cada buró: TransUnion, Equifax y Experian. "
+        "Los datos no se suman entre los burós, ya que la misma tarjeta de crédito u otra cuenta puede estar reportada en los tres burós al mismo tiempo, y lo mismo aplica para otros datos. "
+        "Una misma cuenta puede aparecer en los tres reportes, pero no es que sean cuentas diferentes ni que se sumen los montos. "
+        "Para responder sobre el puntaje ten en cuenta siempre esta unica escala de puntaje, no otra, la escala es: de 300 hasta 579 para Muy bajo, de 580 hasta 669 para Regular, de 670 hasta 739 para Bueno, de 740 hasta 799 para Muy bueno, y de 800 en adelante para Excelente. "
+        "No respondas preguntas que no sean relacionadas con el credito. "
+        "Responde siempre que puedas dando datos del reporte de credito. "
+        "Si la pregunta es sobre dónde consultar un dato, explica cómo se puede obtener esa información en la vida real, como lo haría una persona fuera del sistema, sin mencionar detalles técnicos, archivos, JSON ni contexto interno."
+        "Contexto: {context} "
+    )
+
+    memory = [("system", system_prompt)] 
+    
+    for m in query_request.last_messages:
+        memory.append(("human", m.input))
+        memory.append(("ai", m.output))
+
+    memory.append(("human", "{input}"))
+
+    prompt = ChatPromptTemplate(memory)
+    question_answer_chain = create_stuff_documents_chain(llm, prompt)
+    chain = create_retrieval_chain(retriever, question_answer_chain)
+    response = chain.invoke({"input": query_request.query})
+    return {
+        'answer': response['answer'],
+    }
+
+
 # endpoint for knowing when user is on db
 class IsUserCreditDataRequest(BaseModel):
     API_KEY: str
@@ -284,6 +335,60 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
         raise HTTPException(status_code=400, detail="Api key dont match")
     vector_store.delete(where={"user_id": request.user_id})
     return "ok"
+
+class DocumentType(str, Enum):
+    driver_license = "Licencia de conducir"
+    state_issued_id = "Identificación emitida por el Estado"
+    passport = "Pasaporte"
+    utility_bill = "Factura de servicios públicos"
+    bank_account_statement = "Estado de cuenta bancaria"
+    lease = "Contrato de arrendamiento"
+    misc = "Otro"
+
+class GenericDocumentField(BaseModel):
+    field: str = Field(description="Nombre del campo en espaniol");
+    value: str = Field(description="Valor del campo, si es una fecha en formato yyyy-mm-dd");
+
+class GenericDocumentData(BaseModel):
+    fields: list[GenericDocumentField] = Field(description="Lista de campos y valores del documento");
+
+class DocumentData(BaseModel):
+    data: GenericDocumentData = Field(description="Datos del documento");
+    is_valid: bool = Field(description="Si el documento es valido");
+    error: Optional[str] = Field(description="Mensaje de error si el documento no es valido");
+    type: DocumentType = Field(description="Tipo de documento");
+
+class ScanImageRequest(BaseModel):
+    API_KEY: str
+    image_url: str
+
+@app.post("/scan_image")
+async def scan_image(request: ScanImageRequest) -> DocumentData:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    vision_model = ChatOpenAI(model='gpt-4o')
+    prompts = [
+        SystemMessage("""
+                      Tu tarea es extraer todos los datos de la imagen y devolverlos como un arreglo del tipo campo y valor, si el valor es una fecha en formato yyyy-mm-dd. 
+                      No agregues informacion extra ni comentarios, responde solo con el contenido de la imagen. 
+                      Dame el tipo de documento que aparece en la imagen (Licencia de conducir, Identificación emitida por el Estado, Pasaporte, Factura de servicios públicos, Estado de cuenta bancaria, Contrato de arrendamiento u otro). 
+                      Verifica que la información sea legible y clara. Indica si alguna parte se ve borrosa, ilegible o presenta errores visuales que podrían impedir su correcta validación. Si no es un documento relevante tambien retorna como error que la imagen deberia ser un documento del tipo Licencia de conducir, Identificación emitida por el Estado, Pasaporte, Factura de servicios públicos, Estado de cuenta bancaria, Contrato de arrendamiento u otro.
+                """),
+        HumanMessage(content=[
+            {
+                'type': 'text',
+                'text': 'A partir de la imagen extrae los datos de la misma, el tipo de documento y si es una imagen valida de un documento'
+            },
+            { 
+                'type': 'image_url', 
+                'image_url': { 'url': request.image_url, 'detail': 'auto'} 
+            }
+        ] )
+    ]
+    structured_llm = vision_model.with_structured_output(DocumentData)
+    vision_response = structured_llm.invoke(prompts)
+    return vision_response
+    
 
 def insert_general_knowledge():
     try:
