@@ -388,7 +388,39 @@ async def scan_image(request: ScanImageRequest) -> DocumentData:
     structured_llm = vision_model.with_structured_output(DocumentData)
     vision_response = structured_llm.invoke(prompts)
     return vision_response
-    
+
+# paraphrase letter in english
+class ParaphraseLetterResponse(BaseModel):
+    paraphrased_letter: str
+
+class ParaphraseLetterRequest(BaseModel):
+    API_KEY: str
+    letter: str
+
+@app.post("/paraphrase-letter")
+async def paraphrase_letter(request: ParaphraseLetterRequest):
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    llm = ChatOpenAI()
+    prompts = [
+        SystemMessage("""
+                      Your task is to paraphrase this letter, keeping professional tone and style.  
+                      Return the paraphrased letter in english. 
+                """),
+        HumanMessage(content=[
+            {
+                'type': 'text',
+                'text': 'Paraphrase this letter in english, keeping professional tone and style.'
+            },
+            { 
+                'type': 'text', 
+                'text': request.letter
+            }
+        ] )
+    ]
+    structured_llm = llm.with_structured_output(ParaphraseLetterResponse)
+    response = structured_llm.invoke(prompts)
+    return response
 
 def insert_general_knowledge():
     try:
