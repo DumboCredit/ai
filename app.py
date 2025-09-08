@@ -1,9 +1,12 @@
+import os
+from dotenv import load_dotenv
+load_dotenv(".env")
+os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
+
 # imports
 from fastapi import FastAPI, Request, HTTPException
 import logging
 from fastapi.responses import JSONResponse
-from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
@@ -13,30 +16,18 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from dotenv import load_dotenv
 from enum import Enum
 from pydantic import BaseModel, Field
 import uvicorn 
-import os
 from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
 
+from services.bd import vector_store
 
 # env vars
-load_dotenv(".env")
-os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
-
-# langchain
-embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-vector_store = Chroma(
-    collection_name="credit_collection",
-    embedding_function=embeddings,
-    persist_directory="./credit_db",  # Where to save data locally, remove if not necessary
-    collection_metadata={"hnsw:space": "cosine"}
-)
 
 # api
 app = FastAPI(
@@ -462,6 +453,69 @@ def insert_general_knowledge():
     except Exception as e:
         print(e)
 
+
+from utils.get_resume_report import get_resume_report
+
+
+class ErrorDispute(BaseModel):
+    reason: str  = Field(description="Rason por la q el usuario quiere disputar");
+    error: str  = Field(description="El error en cuestion");
+    account_number: Optional[str]  = Field(description="El numero de cuenta asociado en caso de ser una cuenta");
+    name_account: Optional[str] = Field(description="El nombre de cuenta asociado en caso de ser una cuenta");
+    credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
+    inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
+    name_inquiry: Optional[str] = Field(description="El nombre del inquiry en caso de ser un inquiry");
+    action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
+
+class ErrorsDispute(BaseModel):
+    errors: list[ErrorDispute]
+
+class GetDisputesRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+@app.post("/get-disputes")
+def get_disputes(request:GetDisputesRequest):
+    disputes = get_resume_report(request.user_id)
+    report = "\n".join([dispute for dispute in disputes])
+
+    prompt = f"""
+    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
+
+    1. **Comparación de colecciones en los tres burós:**
+        - Compara la información de las colecciones reportadas por los tres burós.
+        - Verifica que los saldos, las fechas y los estados sean idénticos. Si no es así, genera una disputa.
+
+    2. **Verificación de información errónea:**
+        - **Balance incorrecto:** Si el balance de la deuda registrado es erróneo, marca este dato para ser disputado.
+        - **Fecha incorrecta:** Verifica que las fechas de la última actividad y la fecha de apertura sean correctas. Si alguna de estas fechas está equivocada, se debe disputar.
+        - **Fecha de última actividad:** Esta fecha debe ser precisa. Si no lo es, disputa el dato.
+
+    3. **Estado de la colección:**
+        - **Colección abierta incorrectamente:** Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
+
+    4. **Colección duplicada:**
+        - Si una misma colección está reportada en más de un buró, o si aparece duplicada dentro del mismo buró, se debe disputar la eliminación de la entrada duplicada.
+
+    5. **Colección y cuenta original abiertas simultáneamente:**
+        - Si una cuenta original está abierta y tiene una colección asociada abierta, se debe disputar para corregir esta incongruencia. Ambas no deberían estar abiertas al mismo tiempo.
+
+    6. **Marcas negativas a buscar:**
+
+    MARCAS NEGATIVAS:
+    Late payments: cuando en una cuenta se han hecho pagos fuera de tiempo aparece historial de pago tarde, pueden ser por 30, 60, 90, 120, 150 o 180 días. Las marcas de pago tarde se quedan en el reporte aunque la deuda se pague e incluso si la cuenta se cierra. En el caso de estas marcas negativas se trabaja solo el historial de pago tarde, no la cuenta completa. 
+    Collection/Charge off: cuando una cuenta llega a los 180 o más días de pago tarde, los creditores la marcan como collection o charge off, es decir ya no solo se debe la cantidad que está como “pago tarde” sino el balance completo de la cuenta. En esos casos las líneas de crédito se cierran. Las marcas de collection o charge off son las que más afectan al crédito y en estos casos se disputa la cuenta completa con el fin de que se elimine del todo sin que se tenga que pagar. En los casos donde no se eliminen las colecciones después de 3 rondas de disputa seguidas, se presenta al cliente la alternativa de buscar acuerdos de pago, para que esa cuenta aparezca con balance $0 y de esa forma deje de afectar el crédito. 
+    Repossession: cuando un préstamo de carro no es pagado se marca como repossession, en cuestiones del crédito es parecido a una colección, con la diferencia de que el balance que se reporta en deuda es el que queda después de que el banco recupera el auto, lo subastan y lo que ganan en la subasta lo descuentan de la deuda total. Suelen ser un poco más complicadas de eliminar y de obtener acuerdos de pago. 
+    Inquiries: marcas que dejan las revisiones que hacen los bancos antes de autorizar un préstamo o una línea de crédito. En la reparación solo se pueden trabajar los que correspondan a cuentas marcadas como cerradas o que no se hayan autorizado, es decir no aparezcan en el reporte de crédito, es recomendable esperar un mes para disputar un nuevo inquiry porque a veces pueden tardar una semanas
+
+
+    Los informes de los tres burós se encuentran a continuación:
+    
+    {report}
+"""
+    llm = ChatOpenAI(model="gpt-5")
+    structured_llm = llm.with_structured_output(ErrorsDispute)
+    response = structured_llm.invoke(prompt)
+    return response.errors
 
 insert_general_knowledge()
 

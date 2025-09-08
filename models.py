@@ -84,6 +84,8 @@ class _CREDIT_LIABILITY(BaseModel):
     TermsDescription: Optional[str] = None
     CREDIT_REPOSITORY: Union[CREDIT_REPOSITORY, list[CREDIT_REPOSITORY]] 
     HIGHEST_ADVERSE_RATING: Optional[_HIGHEST_ADVERSE_RATING] = None
+    IsChargeoffIndicator: Optional[str] = None
+    IsCollectionIndicator: Optional[str] = None
 
 # request
 class CreditRequest(BaseModel):

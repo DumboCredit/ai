@@ -10,9 +10,15 @@ def get_late_payments(liability:_CREDIT_LIABILITY) -> str:
 
 def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
     """Summary of the liability account"""
+    isChargeOff = libCC.IsChargeoffIndicator == "Y"
+    isCollection = libCC.IsCollectionIndicator == "Y"
     isCreditCard = libCC.CreditLoanType == "CreditCard" or libCC.CreditLoanType == "ChargeAccount"
     translated_credit_loan_type = get_translation(libCC.CreditLoanType)
     content = f"{translated_credit_loan_type or "Otro prestamo"}: "
+    if isChargeOff:
+        content += f"Es un charge off (cobranza). "
+    if isCollection:
+        content += f"Es un collection (cobranza). "
     if libCC.UnpaidBalanceAmount:
         content += f"Saldo: {libCC.UnpaidBalanceAmount}. "
     if not isCreditCard and libCC.UnpaidBalanceAmount:
