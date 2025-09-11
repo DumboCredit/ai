@@ -22,6 +22,7 @@ import uvicorn
 from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
+from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
 
@@ -71,6 +72,104 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     page_content= f"Mi primer nombre es: {historic_credit.BORROWER.FirstName}",
                     metadata={"field": "FirstName", "source": "Personal Info", "user_id": historic_credit.USER_ID },
                     id="FirstName",
+                )
+            )
+        
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.MiddleName is None:
+            documents.append(
+                Document(
+                    page_content= f"Mi segundo nombre es: {historic_credit.BORROWER.MiddleName}",
+                    metadata={"field": "MiddleName", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="MiddleName",
+                )
+            )
+        
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.LastName is None:
+            documents.append(
+                Document(
+                    page_content= f"Mi apellido es: {historic_credit.BORROWER.LastName}",
+                    metadata={"field": "LastName", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="LastName",
+                )
+            )
+
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.SSN is None:
+            documents.append(
+                Document(
+                    page_content= f"Mi SSN es: {historic_credit.BORROWER.SSN}",
+                    metadata={"field": "SSN", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="SSN",
+                )
+            )
+
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.BirthDate is None:
+            documents.append(
+                Document(
+                    page_content= f"Mi Fecha de nacimiento es: {historic_credit.BORROWER.BirthDate}",
+                    metadata={"field": "BirthDate", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="BirthDate",
+                )
+            )
+
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.RESIDENCE is None:
+            documents.append(
+                Document(
+                    page_content= f"Mi Fecha de nacimiento es: {historic_credit.BORROWER.BirthDate}",
+                    metadata={"field": "BirthDate", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="BirthDate",
+                )
+            )
+
+        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.RESIDENCE is None:
+            addresses = f"Mis direcciones son: "
+            if type(historic_credit.BORROWER.RESIDENCE) == list:
+                for residence in historic_credit.BORROWER.RESIDENCE: 
+                    address = ""
+                    if not residence.BorrowerResidencyType is None:
+                        if residence.BorrowerResidencyType == "Current":
+                            address += "Residiendo Actualmente en: "
+                        elif residence.BorrowerResidencyType == "Prior":
+                            address += "Anteriormente residiendo en: "
+                        else: 
+                            address += f"Residencia ({residence.BorrowerResidencyType}) en: "
+                    if not residence.City is None:
+                        address += f"Ciudad {residence.City}, "
+                    if not residence.State is None:
+                        address += f"Estado {residence.State}, "
+                    if not residence.PostalCode is None:
+                        address += f"Codigo Postal {residence.PostalCode}, "
+                    if not residence.StreetAddress is None:
+                        address += f"Calle {residence.StreetAddress}, "
+                    address = address[:-2]
+                    address += "; "
+
+                    addresses += address
+            else:
+                address = ""
+                if not historic_credit.BORROWER.RESIDENCE.BorrowerResidencyType is None:
+                    if historic_credit.BORROWER.RESIDENCE.BorrowerResidencyType == "Current":
+                        address += "Residiendo Actualmente en: "
+                    elif historic_credit.BORROWER.RESIDENCE.BorrowerResidencyType == "Prior":
+                        address += "Anteriormente residiendo en: "
+                    else: 
+                        address += f"Residencia ({historic_credit.BORROWER.RESIDENCE.BorrowerResidencyType}) en: "
+                if not historic_credit.BORROWER.RESIDENCE.City is None:
+                    address += f"Ciudad {historic_credit.BORROWER.RESIDENCE.City}, "
+                if not historic_credit.BORROWER.RESIDENCE.State is None:
+                    address += f"Estado {historic_credit.BORROWER.RESIDENCE.State}, "
+                if not historic_credit.BORROWER.RESIDENCE.PostalCode is None:
+                    address += f"Codigo Postal {historic_credit.BORROWER.RESIDENCE.PostalCode}, "
+                if not historic_credit.BORROWER.RESIDENCE.StreetAddress is None:
+                    address += f"Calle {historic_credit.BORROWER.RESIDENCE.StreetAddress}, "
+                address = address[:-2]
+                address += "; "
+                addresses += address
+
+            documents.append(
+                Document(
+                    page_content= addresses,
+                    metadata={"field": "Address", "source": "Personal Info", "user_id": historic_credit.USER_ID },
+                    id="Address",
                 )
             )
  
@@ -477,7 +576,6 @@ class GetDisputesRequest(BaseModel):
 def get_disputes(request:GetDisputesRequest):
     disputes = get_resume_report(request.user_id)
     report = "\n".join([dispute for dispute in disputes])
-
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
 
@@ -516,6 +614,40 @@ def get_disputes(request:GetDisputesRequest):
     structured_llm = llm.with_structured_output(ErrorsDispute)
     response = structured_llm.invoke(prompt)
     return response.errors
+
+class GetDisputesRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+    errors: list[ErrorDispute]
+@app.post("/generate-letter")
+def get_disputes(request:GetDisputesRequest):
+
+    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this template:
+    Re: Dispute of Inaccurate Information on Credit Report
+
+    Dear Sir/Madam,
+
+    I am writing to dispute the accuracy of several items on my credit report. Under the Fair Credit Reporting Act (FCRA), 15 U.S.C. § 1681i, you are required to ensure that all information reported is accurate and verifiable. I have identified the following inaccuracies:
+
+    1. [Item 1: Insert Account Type and Number]
+    - Dispute Reason: [Insert Dispute Reason] (Metro 2 Code: [Insert Code])
+    - Requested Action: Please verify the accuracy of this information and provide documentation supporting your findings.
+
+    2. [Item 2: Insert Account Type and Number]
+    - Dispute Reason: [Insert Dispute Reason] (Metro 2 Code: [Insert Code])
+    - Requested Action: Please investigate this item and delete the inaccurate information.
+
+    Please conduct a thorough investigation and provide me with a detailed report of your findings, along with the source of the information. I expect your prompt attention to this matter as required by law.
+
+    Do not output anything except the completed letter text. Use the following input data:
+
+    Errors: {request.errors}"""
+
+    llm = ChatOpenAI(model="gpt-5")
+    response = llm.invoke(prompt)
+    return {
+        'letter': response.content
+    }
 
 insert_general_knowledge()
 

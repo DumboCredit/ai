@@ -1,8 +1,20 @@
 from typing import Optional, Union
 from pydantic import BaseModel
 
-class _BORROWER(BaseModel):
-    FirstName: str
+class _RESIDENCE(BaseModel):
+    City: Optional[str] = None
+    State: Optional[str] = None
+    PostalCode: Optional[str] = None
+    StreetAddress: Optional[str] = None
+    BorrowerResidencyType: Optional[str] = None
+
+class _BORROWER(BaseModel): 
+    FirstName: Optional[str] = None
+    MiddleName: Optional[str] = None
+    LastName: Optional[str] = None
+    SSN: Optional[str] = None
+    BirthDate: Optional[str] = None
+    RESIDENCE: Union[Optional[list[_RESIDENCE]], Optional[_RESIDENCE]] = None
 
 # credit score
 class _FACTOR(BaseModel):
