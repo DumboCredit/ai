@@ -26,7 +26,20 @@ from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents
-from services.bd import vector_store
+
+
+from langchain_openai import OpenAIEmbeddings
+from langchain_chroma import Chroma
+
+embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+
+vector_store = Chroma(
+    collection_name="credit_collection",
+    embedding_function=embeddings,
+    persist_directory="./credit_db",  # Where to save data locally, remove if not necessary
+    collection_metadata={"hnsw:space": "cosine"}
+)
+
 
 # env vars
 
@@ -549,9 +562,6 @@ def insert_general_knowledge():
         print(e)
 
 
-from utils.get_resume_report import get_resume_report
-
-
 class ErrorDispute(BaseModel):
     reason: str  = Field(description="Rason por la q el usuario quiere disputar");
     error: str  = Field(description="El error en cuestion");
@@ -570,7 +580,18 @@ class GetDisputesRequest(BaseModel):
     user_id: str
 @app.post("/get-disputes")
 def get_disputes(request:GetDisputesRequest):
-    disputes = get_resume_report(request.user_id)
+
+    results = vector_store.get(
+        where={
+            "$and": [
+                {"user_id": request.user_id},
+                {"source": {"$ne": "CreditSummary"}}
+            ]
+        },  # filter by user_id tag/metadata
+        limit=None  # or a very high number if None is not supported
+    )
+    disputes = results['documents']
+
     report = "\n".join([dispute for dispute in disputes])
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
