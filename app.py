@@ -25,7 +25,7 @@ from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
-
+from utils.prompts import scan_documents
 from services.bd import vector_store
 
 # env vars
@@ -433,6 +433,7 @@ class DocumentType(str, Enum):
     utility_bill = "Factura de servicios públicos"
     bank_account_statement = "Estado de cuenta bancaria"
     lease = "Contrato de arrendamiento"
+    letter = "Carta"
     misc = "Otro"
 
 class GenericDocumentField(BaseModel):
@@ -458,12 +459,7 @@ async def scan_image(request: ScanImageRequest) -> DocumentData:
         raise HTTPException(status_code=400, detail="Api key dont match")
     vision_model = ChatOpenAI(model='gpt-4o')
     prompts = [
-        SystemMessage("""
-                      Tu tarea es extraer todos los datos de la imagen y devolverlos como un arreglo del tipo campo y valor, si el valor es una fecha en formato yyyy-mm-dd. 
-                      No agregues informacion extra ni comentarios, responde solo con el contenido de la imagen. 
-                      Dame el tipo de documento que aparece en la imagen (Licencia de conducir, Identificación emitida por el Estado, Pasaporte, Factura de servicios públicos, Estado de cuenta bancaria, Contrato de arrendamiento u otro). 
-                      Verifica que la información sea legible y clara. Indica si alguna parte se ve borrosa, ilegible o presenta errores visuales que podrían impedir su correcta validación. Si no es un documento relevante tambien retorna como error que la imagen deberia ser un documento del tipo Licencia de conducir, Identificación emitida por el Estado, Pasaporte, Factura de servicios públicos, Estado de cuenta bancaria, Contrato de arrendamiento u otro.
-                """),
+        SystemMessage(scan_documents),
         HumanMessage(content=[
             {
                 'type': 'text',
