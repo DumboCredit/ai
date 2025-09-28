@@ -24,14 +24,17 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
     if not isCreditCard and libCC.UnpaidBalanceAmount:
         base_amount = float(libCC.OriginalBalanceAmount or libCC.HighCreditAmount or libCC.UnpaidBalanceAmount)
         if base_amount != 0:
-            content += f"Queda el: {(float(libCC.UnpaidBalanceAmount)/base_amount) *100}% para pagar de este prestamo"
+            content += f"Queda el: {(float(libCC.UnpaidBalanceAmount)/base_amount) *100}% para pagar de este prestamo. "
     if not libCC.CreditLimitAmount is None:
         content += f"Limite crediticio: {libCC.CreditLimitAmount}. "
     if not libCC.LATE_COUNT is None:
         content += f"Pagos atrasados: {get_late_payments(libCC)}. "
-        content += f"Pagos atrasados por 30 dias: {libCC.LATE_COUNT.Days30}. "
-        content += f"Pagos atrasados por 60 dias: {libCC.LATE_COUNT.Days60}. "
-        content += f"Pagos atrasados por 90 dias: {libCC.LATE_COUNT.Days90}. "
+        if not libCC.LATE_COUNT.Days30 is None: 
+            content += f"Pagos atrasados por 30 dias: {libCC.LATE_COUNT.Days30}. "
+        if not libCC.LATE_COUNT.Days60 is None:
+            content += f"Pagos atrasados por 60 dias: {libCC.LATE_COUNT.Days60}. "
+        if not libCC.LATE_COUNT.Days90 is None:
+            content += f"Pagos atrasados por 90 dias: {libCC.LATE_COUNT.Days90}. "
     if not libCC.MonthsReviewedCount is None:
         content += f"Total de pagos: {libCC.MonthsReviewedCount}. "
     if not libCC.MonthlyPaymentAmount is None:

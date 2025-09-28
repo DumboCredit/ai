@@ -15,7 +15,7 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Union
 from enum import Enum
 from pydantic import BaseModel, Field
 import uvicorn 
@@ -116,15 +116,6 @@ async def add_user_credit_data(historic_credit:CreditRequest):
             )
 
         if not historic_credit.BORROWER is None and not historic_credit.BORROWER.BirthDate is None:
-            documents.append(
-                Document(
-                    page_content= f"Mi Fecha de nacimiento es: {historic_credit.BORROWER.BirthDate}",
-                    metadata={"field": "BirthDate", "source": "Personal Info", "user_id": historic_credit.USER_ID },
-                    id="BirthDate",
-                )
-            )
-
-        if not historic_credit.BORROWER is None and not historic_credit.BORROWER.RESIDENCE is None:
             documents.append(
                 Document(
                     page_content= f"Mi Fecha de nacimiento es: {historic_credit.BORROWER.BirthDate}",
@@ -464,25 +455,33 @@ class DocumentData(BaseModel):
 
 class ScanImageRequest(BaseModel):
     API_KEY: str
-    image_url: str
+    image_url: Union[str, list[str]]
 
 @app.post("/scan_image")
 async def scan_image(request: ScanImageRequest) -> DocumentData:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     vision_model = ChatOpenAI(model='gpt-4o')
-    prompts = [
-        SystemMessage(scan_documents),
-        HumanMessage(content=[
+    content = [
             {
                 'type': 'text',
                 'text': 'A partir de la imagen extrae los datos de la misma, el tipo de documento y si es una imagen valida de un documento'
-            },
-            { 
-                'type': 'image_url', 
-                'image_url': { 'url': request.image_url, 'detail': 'auto'} 
             }
-        ] )
+        ]
+    if type(request.image_url) == list:
+        for image in request.image_url:
+            content.append({ 
+            'type': 'image_url', 
+            'image_url': { 'url': image, 'detail': 'auto'} 
+        })
+    else: 
+        content.append({ 
+            'type': 'image_url', 
+            'image_url': { 'url': request.image_url, 'detail': 'auto'} 
+        })
+    prompts = [
+        SystemMessage(scan_documents),
+        HumanMessage(content=content)
     ]
     structured_llm = vision_model.with_structured_output(DocumentData)
     vision_response = structured_llm.invoke(prompts)
@@ -585,13 +584,15 @@ def get_disputes(request:GetDisputesRequest):
         where={
             "$and": [
                 {"user_id": request.user_id},
-                {"source": {"$ne": "CreditSummary"}}
+                {"source": {"$ne": "CreditSummary"}},
+                {"field": {"$ne": "SSN"}}
             ]
         },  # filter by user_id tag/metadata
         limit=None  # or a very high number if None is not supported
     )
     disputes = results['documents']
 
+    return disputes
     report = "\n".join([dispute for dispute in disputes])
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
