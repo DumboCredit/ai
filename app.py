@@ -579,7 +579,8 @@ class GetDisputesRequest(BaseModel):
     user_id: str
 @app.post("/get-disputes")
 def get_disputes(request:GetDisputesRequest):
-
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
     results = vector_store.get(
         where={
             "$and": [
@@ -633,12 +634,66 @@ def get_disputes(request:GetDisputesRequest):
     response = structured_llm.invoke(prompt)
     return response.errors
 
-class GetDisputesRequest(BaseModel):
+import re
+from datetime import date
+
+class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
     errors: list[ErrorDispute]
 @app.post("/generate-letter")
-def get_disputes(request:GetDisputesRequest):
+def generate_letter(request:GenerateLetterRequest):
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    results = vector_store.get(
+        where={
+            "$and": [
+                {"user_id": request.user_id},
+                {"source": "Personal Info"}
+            ]
+        },  # filter by user_id tag/metadata
+        limit=None  # or a very high number if None is not supported
+    )
+
+    personal_info = results['documents']
+
+    # Extraer nombre completo
+    first_name = ""
+    middle_name = ""
+    last_name = ""
+
+    for line in personal_info:
+        if "primer nombre" in line:
+            first_name = re.search(r": (.+)$", line).group(1)
+        elif "segundo nombre" in line:
+            match = re.search(r": (.+)$", line)
+            if match:
+                middle_name = match.group(1)
+        elif "apellido" in line:
+            last_name = re.search(r": (.+)$", line).group(1)
+
+    full_name = " ".join([first_name, middle_name, last_name]).strip()
+
+    # Obtener fecha actual
+    curr_date = date.today().isoformat()  # 'YYYY-MM-DD'
+
+    # Extraer dirección actual
+    address = ""
+    city = ""
+    state = ""
+    postal_code = ""
+
+    for line in personal_info:
+        if "Residiendo Actualmente" in line:
+            city = re.search(r"Ciudad ([^,;]+)", line).group(1)
+            state = re.search(r"Estado (\w{2})", line).group(1)
+            postal_code = re.search(r"Codigo Postal (\d+)", line).group(1)
+            address = re.search(r"Calle ([^;]+)", line).group(1)
+            break
+
+    header = "\n".join([full_name, address, f"{city}, {state}, {postal_code}", curr_date]) + "\n"
+
+    footer = f"\nSincerely,\n\n{full_name}"
 
     prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this template:
     Re: Dispute of Inaccurate Information on Credit Report
@@ -663,8 +718,17 @@ def get_disputes(request:GetDisputesRequest):
 
     llm = ChatOpenAI(model="gpt-5")
     response = llm.invoke(prompt)
+
+    letters = []
+
+    for repo in ["TransUnion", "Experian", "Equifax"]:
+        letters.append({
+            'repo': repo,
+            'letter': f'{header}\n{repo}\n\n{response.content}\n{footer}'
+        })
+
     return {
-        'letter': response.content
+        'letters': letters
     }
 
 insert_general_knowledge()
