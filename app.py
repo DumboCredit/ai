@@ -641,8 +641,16 @@ class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
     errors: list[ErrorDispute]
+
+class Letter(BaseModel):
+    repo: str
+    letter: str
+
+class GenerateLetterResponse(BaseModel):
+    letters: list[Letter]
+    
 @app.post("/generate-letter")
-def generate_letter(request:GenerateLetterRequest):
+def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     results = vector_store.get(
