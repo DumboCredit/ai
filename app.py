@@ -300,9 +300,12 @@ def retriever_with_score(query: str, user_id: str) -> List[Document]:
 
     return docs
 
+class QueryResponse(BaseModel):
+    answer: str
+
 # endpoint to retrieve an answer
 @app.post("/query")
-async def query(query_request:QueryRequest):
+async def query(query_request:QueryRequest) -> QueryResponse:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
@@ -355,7 +358,7 @@ async def query(query_request:QueryRequest):
     }
 
 @app.post("/query-without-limits")
-async def query_without_limits(query_request:QueryRequest):
+async def query_without_limits(query_request:QueryRequest) -> QueryResponse:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
