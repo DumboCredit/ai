@@ -593,7 +593,6 @@ def get_disputes(request:GetDisputesRequest):
     )
     disputes = results['documents']
 
-    return disputes
     report = "\n".join([dispute for dispute in disputes])
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
