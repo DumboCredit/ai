@@ -577,8 +577,9 @@ class ErrorsDispute(BaseModel):
 class GetDisputesRequest(BaseModel):
     API_KEY: str
     user_id: str
+
 @app.post("/get-disputes")
-def get_disputes(request:GetDisputesRequest):
+def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     results = vector_store.get(
