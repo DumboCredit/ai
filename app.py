@@ -649,8 +649,18 @@ class Letter(BaseModel):
     repo: str
     letter: str
 
+class PersonalInfo(BaseModel):
+    first_name: str
+    middle_name: str
+    last_name: str
+    address: str
+    city: str
+    state: str
+    postal_code: str
+
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
+    sender: PersonalInfo
     
 @app.post("/generate-letter")
 def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
@@ -739,7 +749,16 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
         })
 
     return {
-        'letters': letters
+        'letters': letters,
+        'sender': {
+            'first_name': first_name,
+            'middle_name': middle_name,
+            'last_name': last_name,
+            'address': address,
+            'city': city,
+            'state': state,
+            'postal_code': postal_code
+        }
     }
 
 insert_general_knowledge()
