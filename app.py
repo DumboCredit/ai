@@ -15,7 +15,7 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 from enum import Enum
 from pydantic import BaseModel, Field
 import uvicorn 
@@ -639,10 +639,12 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
 
 import re
 from datetime import date
+from utils.letter_templates import first_round_template, second_round_template, third_round_template
 
 class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
+    round: Literal[1, 2, 3]
     errors: list[ErrorDispute]
 
 class Letter(BaseModel):
@@ -716,22 +718,20 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this template:
-    Re: Dispute of Inaccurate Information on Credit Report
+    if request.round == 1:
+        template = first_round_template
+    elif request.round == 2:
+        template = second_round_template
+    elif request.round == 3:
+        template = third_round_template
 
-    Dear Sir/Madam,
+    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this example/template:
+    
+    Start of example/template:
 
-    I am writing to dispute the accuracy of several items on my credit report. Under the Fair Credit Reporting Act (FCRA), 15 U.S.C. § 1681i, you are required to ensure that all information reported is accurate and verifiable. I have identified the following inaccuracies:
+    {template}
 
-    1. [Item 1: Insert Account Type and Number]
-    - Dispute Reason: [Insert Dispute Reason] (Metro 2 Code: [Insert Code])
-    - Requested Action: Please verify the accuracy of this information and provide documentation supporting your findings.
-
-    2. [Item 2: Insert Account Type and Number]
-    - Dispute Reason: [Insert Dispute Reason] (Metro 2 Code: [Insert Code])
-    - Requested Action: Please investigate this item and delete the inaccurate information.
-
-    Please conduct a thorough investigation and provide me with a detailed report of your findings, along with the source of the information. I expect your prompt attention to this matter as required by law.
+    End of example/template;
 
     Do not output anything except the completed letter text. Use the following input data:
 
