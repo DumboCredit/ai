@@ -663,6 +663,8 @@ class PersonalInfo(BaseModel):
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
     sender: PersonalInfo
+
+from utils.get_credit_repo_data import get_credit_repo_data
     
 @app.post("/generate-letter")
 def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
@@ -724,29 +726,72 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
         template = second_round_template
     elif request.round == 3:
         template = third_round_template
-
-    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this example/template:
     
-    Start of example/template:
-
-    {template}
-
-    End of example/template;
-
-    Do not output anything except the completed letter text. Use the following input data:
-
-    Errors: {request.errors}"""
-
     llm = ChatOpenAI(model="gpt-5")
-    response = llm.invoke(prompt)
+
+    equifax_errors = [
+        error for error in request.errors
+        if (
+            (isinstance(error.credit_repo, list) and "Equifax" in error.credit_repo)
+            or (isinstance(error.credit_repo, str) and "Equifax" in error.credit_repo)
+        )
+    ]
+
+    experian_errors = [
+        error for error in request.errors
+        if (
+            (isinstance(error.credit_repo, list) and "Experian" in error.credit_repo)
+            or (isinstance(error.credit_repo, str) and "Experian" in error.credit_repo)
+        )
+    ]
+    transunion_errors = [
+        error for error in request.errors
+        if (
+            (isinstance(error.credit_repo, list) and "TransUnion" in error.credit_repo)
+            or (isinstance(error.credit_repo, str) and "TransUnion" in error.credit_repo)
+        )
+    ]
+
+    error_list = [
+        {
+            'repo': 'Equifax',
+            'errors': equifax_errors
+        },
+        {
+            'repo': 'Experian',
+            'errors': experian_errors
+        },
+        {
+            'repo': 'TransUnion',
+            'errors': transunion_errors
+        }
+    ]
 
     letters = []
 
-    for repo in ["TransUnion", "Experian", "Equifax"]:
-        letters.append({
-            'repo': repo,
-            'letter': f'{header}\n{repo}\n\n{response.content}\n{footer}'
-        })
+    for error in error_list:
+        if len(error['errors']):
+            repo_data = get_credit_repo_data(error['repo'])
+
+            prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this example/template:
+
+            Start of example/template:
+
+            {template}
+
+            End of example/template;
+
+            Do not output anything except the completed letter text. Use the following input data:
+
+            Errors: {error['errors']}"""
+
+            response = llm.invoke(prompt)
+
+            letters.append({
+                'repo': error['repo'],
+                'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\n\n{response.content}\n{footer}'
+            })
+
 
     return {
         'letters': letters,
