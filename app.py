@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-from langchain.schema.messages import HumanMessage, SystemMessage
+from langchain.schema.messages import HumanMessage, SystemMessage, AIMessage
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
@@ -357,8 +357,15 @@ async def query(query_request:QueryRequest) -> QueryResponse:
         'answer': response['answer'],
     }
 
+class AiAnswer(BaseModel):
+    answer: str = Field(description="Respuesta");
+    must_talk_with_a_human: bool = Field(description="Si el usuario debe contactar o no con un humano para la pregunta que esta haciendo");
+
+class PosAiAnswer(BaseModel):
+    must_talk_with_a_human: bool = Field(description="Si el usuario debe contactar o no con un humano para la pregunta que esta haciendo");
+
 @app.post("/query-without-limits")
-async def query_without_limits(query_request:QueryRequest) -> QueryResponse:
+async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
@@ -401,8 +408,26 @@ async def query_without_limits(query_request:QueryRequest) -> QueryResponse:
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
     response = chain.invoke({"input": query_request.query})
+
+    llm = ChatOpenAI()
+
+    structured_llm = llm.with_structured_output(PosAiAnswer)
+
+    prompts = [
+        SystemMessage("Identifica si es indispensable la intervencion de una persona humana en este contexto."),
+    ]
+
+    for m in query_request.last_messages:
+        prompts.append(HumanMessage(content=m.input))
+        prompts.append(AIMessage(content=m.output))
+
+    prompts.append(HumanMessage(content=query_request.query))
+
+    pos_response = structured_llm.invoke(prompts)
+    
     return {
         'answer': response['answer'],
+        'must_talk_with_a_human': pos_response.must_talk_with_a_human
     }
 
 
