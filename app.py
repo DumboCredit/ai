@@ -569,6 +569,7 @@ class ErrorDispute(BaseModel):
     error: str  = Field(description="El error en cuestion");
     account_number: Optional[str]  = Field(description="El numero de cuenta asociado en caso de ser una cuenta");
     name_account: Optional[str] = Field(description="El nombre de cuenta asociado en caso de ser una cuenta");
+    name_inquiry: Optional[str] = Field(description="El nombre del inquiry asociado en caso de ser un inquiry");
     credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
     name_inquiry: Optional[str] = Field(description="El nombre del inquiry en caso de ser un inquiry");
