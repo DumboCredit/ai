@@ -493,7 +493,7 @@ async def scan_image(request: ScanImageRequest) -> DocumentData:
     content = [
             {
                 'type': 'text',
-                'text': 'A partir de la imagen extrae los datos de la misma, el tipo de documento y si es una imagen valida de un documento'
+                'text': 'A partir de la imagen extrae los datos de la misma, el tipo de documento y si es una imagen valida de un documento. Identifica si tiene algun error esta carta, q permita abrir un caso de litigacion, como puede ser un error de forma, contenido, lenguaje ilegal, amenazas, etc.'
             }
         ]
     if type(request.image_url) == list:
