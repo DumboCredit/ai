@@ -832,6 +832,76 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
         }
     }
 
+class VerifyErrorsRequest(BaseModel):
+    errors: list[ErrorDispute]
+    API_KEY: str
+    user_id: str
+
+class RepoError(BaseModel):
+    TransUnion: bool
+    Equifax: bool
+    Expirian: bool
+
+class VerifyErrorsResponse(BaseModel):
+    removed_from_report: list[RepoError] = Field(description="Si esta o no el error, separado por reporte");
+
+@app.post("/verify-errors")
+def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    results = vector_store.get(
+        where={
+            "$and": [
+                {"user_id": request.user_id},
+                {"source": {"$ne": "CreditSummary"}},
+                {"field": {"$ne": "SSN"}}
+            ]
+        },  # filter by user_id tag/metadata
+        limit=None  # or a very high number if None is not supported
+    ) 
+    disputes = results['documents']
+    report = "\n".join([dispute for dispute in disputes])
+
+    errors = "\n"
+    i = 1
+
+    for error in request.errors:
+        errors += f"{i}- "
+        if isinstance(error.name_account, str):
+            errors += f"Nombre de la cuenta: {error.name_account}\n"
+        if isinstance(error.account_number, str):
+            errors += f"Numero de la cuenta: {error.account_number}\n"
+        if isinstance(error.name_inquiry, str):
+            errors += f"Nombre del inquiry: {error.name_inquiry}\n"
+        if isinstance(error.inquiry_id, str):
+            errors += f"Identificador del inquiry: {error.name_inquiry}\n"
+
+        if isinstance(error.credit_repo, str):
+            errors += f"Buro de credito: {error.credit_repo}\n"
+        else:
+            errors += f"Buros de credito: {", ".join([repo for repo in error.credit_repo])}\n"
+
+        if isinstance(error.reason, str):
+            errors += f"Rason de la disputa: {error.reason}"
+        if isinstance(error.error, str):
+            errors += f"Error en cuestion: {error.error}"
+
+
+    prompt = f"""
+        Eres un sistema de verificacion de errores en el credito, debes devolver de manera ordenada si estan aun presentes o no en el credito los siguientes errores, analizalos uno por uno, ten todo en cuenta, y responde por cada error Verdadero(si esta presente el error en el reporte de credito), Falso(si no aparece en el credito), esto por cada buro de credito (Expirian, TransUnion, Equifax):
+        
+        Errores:
+        {errors}
+        Los informes de los tres burós se encuentran a continuación:
+        {report}
+    """
+
+    llm = ChatOpenAI(model="gpt-5")
+    structured_llm = llm.with_structured_output(VerifyErrorsResponse)
+    response = structured_llm.invoke(prompt)
+    return response
+
+
 insert_general_knowledge()
 
 if __name__=="__main__":
