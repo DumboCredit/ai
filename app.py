@@ -653,6 +653,16 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     Repossession: cuando un préstamo de carro no es pagado se marca como repossession, en cuestiones del crédito es parecido a una colección, con la diferencia de que el balance que se reporta en deuda es el que queda después de que el banco recupera el auto, lo subastan y lo que ganan en la subasta lo descuentan de la deuda total. Suelen ser un poco más complicadas de eliminar y de obtener acuerdos de pago. 
     Inquiries: marcas que dejan las revisiones que hacen los bancos antes de autorizar un préstamo o una línea de crédito. En la reparación solo se pueden trabajar los que correspondan a cuentas marcadas como cerradas o que no se hayan autorizado, es decir no aparezcan en el reporte de crédito, es recomendable esperar un mes para disputar un nuevo inquiry porque a veces pueden tardar una semanas
 
+    De cada error que encuentres debes decir:
+    - Rason por la q el usuario quiere disputar
+    - El error en cuestion
+    - El numero de cuenta asociado en caso de ser una cuenta
+    - El nombre de cuenta asociado en caso de ser una cuenta
+    - El nombre del inquiry asociado en caso de ser un inquiry
+    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los q esta
+    - El identificador del inquiry en caso de ser un inquiry
+    - El nombre del inquiry en caso de ser un inquiry
+    - La accion a tomar por el usuario
 
     Los informes de los tres burós se encuentran a continuación:
     
