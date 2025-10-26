@@ -944,7 +944,7 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
         {report}
     """
 
-    llm = ChatOpenAI(model="gpt-5", temperature=0)
+    llm = ChatOpenAI(model="gpt-5")
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
