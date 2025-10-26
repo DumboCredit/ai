@@ -597,7 +597,6 @@ class ErrorDispute(BaseModel):
     name_inquiry: Optional[str] = Field(description="El nombre del inquiry asociado en caso de ser un inquiry");
     credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
-    name_inquiry: Optional[str] = Field(description="El nombre del inquiry en caso de ser un inquiry");
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
 
 class ErrorsDispute(BaseModel):
@@ -607,23 +606,67 @@ class GetDisputesRequest(BaseModel):
     API_KEY: str
     user_id: str
 
-@app.post("/get-disputes")
-def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
-    if os.getenv("API_KEY") != request.API_KEY:
-        raise HTTPException(status_code=400, detail="Api key dont match")
+def get_user_report(user_id:str):
     results = vector_store.get(
         where={
             "$and": [
-                {"user_id": request.user_id},
+                {"user_id": user_id},
                 {"source": {"$ne": "CreditSummary"}},
-                {"field": {"$ne": "SSN"}}
+                {"source": {"$ne": "CreditScore"}},
+                {"field": {"$ne": "SSN"}},
+                {"field": {"$ne": "credit_cards"}},
+                {"field": {"$ne": "auto_loans"}},
+                {"field": {"$ne": "education_loans"}},
+                {"field": {"$ne": "mortgage_loans"}}
             ]
         },  # filter by user_id tag/metadata
         limit=None  # or a very high number if None is not supported
     )
     disputes = results['documents']
 
+    pattern_account_id = r'ID de la cuenta:\s*[a-fA-F0-9]{32}\.'
+
     report = "\n".join([dispute for dispute in disputes])
+
+    bf = len(report)
+
+    report = re.sub(pattern_account_id, '', report).strip()
+
+    report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
+                r"Nombre: \1 \2 \3\nNacimiento: \4", report, flags=re.S)
+
+    reemplazos = {
+        " Tipo de Consulta: HARD;": "",
+        "Fecha de apertura de la cuenta:": "Abierta el:",
+        "Fecha de ultima actividad:": "Ultima actividad el:",
+        "Pagos atrasados: 0.0": "Sin pagos atrasados",
+        "Queda el: 0.0% para pagar de este prestamo": "Pagado por completo",
+        "Buro de Credito": "Buro",
+        "Estado de la cuenta": "Estado",
+        "Nombre del acreedor:": "Acreedor:",
+        "Tipo de fuente de plazo:": "Tipo/Fuente:",
+        "Tipo de Fuente de Plazo:": "Tipo/Fuente:",
+        "Segun lo acordado": "OK",
+        "Ciudad ": "",
+        "Estado ": "",
+        "Codigo Postal ": "",
+        "Calle ": "",
+        "Cantidad de Pago Mensual: 0": "Sin Pago Mensual",
+        "Cantidad de Pago Mensual:": "Pago mensual:"
+    }
+    for k, v in reemplazos.items():
+        report = report.replace(k, v)
+
+    return report
+
+@app.post("/get-disputes")
+def get_disputes(request:GetDisputesRequest):
+# -> list[ErrorDispute]:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    
+    report = get_user_report(request.user_id)
+
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
 
@@ -653,16 +696,15 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     Repossession: cuando un préstamo de carro no es pagado se marca como repossession, en cuestiones del crédito es parecido a una colección, con la diferencia de que el balance que se reporta en deuda es el que queda después de que el banco recupera el auto, lo subastan y lo que ganan en la subasta lo descuentan de la deuda total. Suelen ser un poco más complicadas de eliminar y de obtener acuerdos de pago. 
     Inquiries: marcas que dejan las revisiones que hacen los bancos antes de autorizar un préstamo o una línea de crédito. En la reparación solo se pueden trabajar los que correspondan a cuentas marcadas como cerradas o que no se hayan autorizado, es decir no aparezcan en el reporte de crédito, es recomendable esperar un mes para disputar un nuevo inquiry porque a veces pueden tardar una semanas
 
-    De cada error que encuentres debes decir:
-    - Rason por la q el usuario quiere disputar
-    - El error en cuestion
-    - El numero de cuenta asociado en caso de ser una cuenta
-    - El nombre de cuenta asociado en caso de ser una cuenta
-    - El nombre del inquiry asociado en caso de ser un inquiry
-    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los q esta
-    - El identificador del inquiry en caso de ser un inquiry
-    - El nombre del inquiry en caso de ser un inquiry
-    - La accion a tomar por el usuario
+    Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
+    - Rason por la q el usuario quiere disputar(reason)
+    - El error en cuestion(error)
+    - El numero de cuenta asociado en caso de ser una cuenta(account_number)
+    - El nombre de cuenta asociado en caso de ser una cuenta(name_account)
+    - El nombre del inquiry asociado en caso de ser un inquiry(name_inquiry)
+    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, en formato de lista(credit_repo)
+    - El identificador del inquiry en caso de ser un inquiry(inquiry_id)
+    - La accion a tomar por el usuario(action)
 
     Los informes de los tres burós se encuentran a continuación:
     
@@ -863,18 +905,8 @@ class VerifyErrorsResponse(BaseModel):
 def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
-    results = vector_store.get(
-        where={
-            "$and": [
-                {"user_id": request.user_id},
-                {"source": {"$ne": "CreditSummary"}},
-                {"field": {"$ne": "SSN"}}
-            ]
-        },  # filter by user_id tag/metadata
-        limit=None  # or a very high number if None is not supported
-    ) 
-    disputes = results['documents']
-    report = "\n".join([dispute for dispute in disputes])
+
+    report = get_user_report(request.user_id)
 
     errors = "\n"
     i = 1
@@ -912,7 +944,7 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
         {report}
     """
 
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(model="gpt-5", temperature=0)
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
