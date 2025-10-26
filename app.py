@@ -614,6 +614,7 @@ class GetDisputesRequest(BaseModel):
     user_id: str
 
 def get_user_report(user_id:str):
+    logger.debug("fetching user data")
     results = vector_store.get(
         where={
             "$and": [
@@ -629,13 +630,14 @@ def get_user_report(user_id:str):
         },  # filter by user_id tag/metadata
         limit=None  # or a very high number if None is not supported
     )
+
+    logger.debug("fetched user data")
+
     disputes = results['documents']
 
     pattern_account_id = r'ID de la cuenta:\s*[a-fA-F0-9]{32}\.'
 
     report = "\n".join([dispute for dispute in disputes])
-
-    bf = len(report)
 
     report = re.sub(pattern_account_id, '', report).strip()
 
@@ -663,6 +665,8 @@ def get_user_report(user_id:str):
     }
     for k, v in reemplazos.items():
         report = report.replace(k, v)
+
+    logger.debug("return user data")
 
     return report
 
