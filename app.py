@@ -635,7 +635,7 @@ class GetDisputesRequest(BaseModel):
 def get_user_report(user_id:str):
     logger.debug("fetching user data")
     vector_store = Chroma(
-        collection_name=f"{request.user_id}_credit_collection",
+        collection_name=f"{user_id}_credit_collection",
         embedding_function=embeddings,
         persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
         collection_metadata={"hnsw:space": "cosine"},
