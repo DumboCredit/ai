@@ -33,12 +33,7 @@ from langchain_chroma import Chroma
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
-vector_store = Chroma(
-    collection_name="credit_collection",
-    embedding_function=embeddings,
-    persist_directory="./credit_db",  # Where to save data locally, remove if not necessary
-    collection_metadata={"hnsw:space": "cosine"}
-)
+credit_db_dir = "./credit_db"
 
 
 # env vars
@@ -279,6 +274,12 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                 ))
 
         uuids = [str(uuid4()) for _ in range(len(documents))]
+        vector_store = Chroma(
+            collection_name=f"{historic_credit.USER_ID}_credit_collection",
+            embedding_function=embeddings,
+            persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+            collection_metadata={"hnsw:space": "cosine"},
+        )
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
   
@@ -298,15 +299,6 @@ from typing import List
 from langchain_core.documents import Document
 from langchain_core.runnables import chain
 
-
-@chain
-def retriever_with_score(query: str, user_id: str) -> List[Document]:
-    docs, scores = zip(*vector_store.similarity_search_with_score(query, k=30, filter={'$or':[{"user_id": user_id}, {"source": "General Knowledge"}]}))
-    for doc, score in zip(docs, scores):
-        doc.metadata["score"] = score
-
-    return docs
-
 class QueryResponse(BaseModel):
     answer: str
 
@@ -316,6 +308,12 @@ async def query(query_request:QueryRequest) -> QueryResponse:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
+    vector_store = Chroma(
+        collection_name=f"{query_request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
@@ -375,6 +373,13 @@ class PosAiAnswer(BaseModel):
 async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    vector_store = Chroma(
+        collection_name=f"{query_request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
     
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
@@ -447,6 +452,13 @@ class IsUserCreditDataRequest(BaseModel):
 async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    vector_store = Chroma(
+        collection_name=f"{request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
     response = vector_store.get(where={"user_id": request.user_id})
     if len(response['documents']) > 0:
         return "ok"
@@ -462,6 +474,13 @@ class DeleteUserCreditDataRequest(BaseModel):
 async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    vector_store = Chroma(
+        collection_name=f"{request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
     vector_store.delete(where={"user_id": request.user_id})
     return "ok"
 
@@ -555,45 +574,45 @@ async def paraphrase_letter(request: ParaphraseLetterRequest):
     response = structured_llm.invoke(prompts)
     return response
 
-def insert_general_knowledge():
-    try:
-        vector_store.delete(where={"source": "General Knowledge"})
-        documents = [
-            Document(
-                page_content= f"¿Dónde veo si tengo pagos atrasados?: En la sección de historial de pagos de cada cuenta verás los pagos mes a mes. Si hay un número como “30” o “60”, significa que hubo un pago atrasado de 30 o 60 días en ese mes. Si todo dice “OK”, significa que los pagos han sido puntuales.",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK1",
-            ),
-            Document(
-                page_content= f"¿Dónde puedo simular mi puntaje de credito?: En la sección de simulador de puntaje.",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK2",
-            ),
-            Document(
-                page_content= f"¿Como funciona el simulador de puntaje?: Simulador de Puntaje comienza con la información de su informe de crédito actual y analiza cómo el cambio de esa información podría afectar su puntuación. Por supuesto, todo es hipotético. En realidad, la simulación de estos cambios no afectará su puntaje ni su informe.",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK3",
-            ),
-            Document(
-                page_content= f"¿En que modelo de puntaje se base el simulador de credito?: Nuestra herramienta se basa en los puntajes de crédito de VantageScore® 3.0. Su puntaje siempre cambiará en función del modelo que utilice en ese momento.",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK4",
-            ),
-            Document(
-                page_content= f"¿Donde puedo aprender mas sobre credito?: Tenemos varios cursos en la plataforma para que puedas aprender mas sobre credito. Puede acceder a ellos en la sección de cursos disponible en el menu de usuario.",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK5",
-            ),
-            Document(
-                page_content= f"Rangos de puntaje de credito: 300-579: Muy bajo, 580-669: Regular, 670-739: Bueno, 740-799: Muy bueno, 800+: Excelente",
-                metadata={"field": "Website", "source": "General Knowledge" },
-                id="GK6",
-            ),
-        ]
-        uuids = [str(uuid4()) for _ in range(len(documents))]
-        vector_store.add_documents(documents=documents, ids=uuids)
-    except Exception as e:
-        print(e)
+# def insert_general_knowledge():
+#     try:
+#         vector_store.delete(where={"source": "General Knowledge"})
+#         documents = [
+#             Document(
+#                 page_content= f"¿Dónde veo si tengo pagos atrasados?: En la sección de historial de pagos de cada cuenta verás los pagos mes a mes. Si hay un número como “30” o “60”, significa que hubo un pago atrasado de 30 o 60 días en ese mes. Si todo dice “OK”, significa que los pagos han sido puntuales.",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK1",
+#             ),
+#             Document(
+#                 page_content= f"¿Dónde puedo simular mi puntaje de credito?: En la sección de simulador de puntaje.",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK2",
+#             ),
+#             Document(
+#                 page_content= f"¿Como funciona el simulador de puntaje?: Simulador de Puntaje comienza con la información de su informe de crédito actual y analiza cómo el cambio de esa información podría afectar su puntuación. Por supuesto, todo es hipotético. En realidad, la simulación de estos cambios no afectará su puntaje ni su informe.",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK3",
+#             ),
+#             Document(
+#                 page_content= f"¿En que modelo de puntaje se base el simulador de credito?: Nuestra herramienta se basa en los puntajes de crédito de VantageScore® 3.0. Su puntaje siempre cambiará en función del modelo que utilice en ese momento.",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK4",
+#             ),
+#             Document(
+#                 page_content= f"¿Donde puedo aprender mas sobre credito?: Tenemos varios cursos en la plataforma para que puedas aprender mas sobre credito. Puede acceder a ellos en la sección de cursos disponible en el menu de usuario.",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK5",
+#             ),
+#             Document(
+#                 page_content= f"Rangos de puntaje de credito: 300-579: Muy bajo, 580-669: Regular, 670-739: Bueno, 740-799: Muy bueno, 800+: Excelente",
+#                 metadata={"field": "Website", "source": "General Knowledge" },
+#                 id="GK6",
+#             ),
+#         ]
+#         uuids = [str(uuid4()) for _ in range(len(documents))]
+#         vector_store.add_documents(documents=documents, ids=uuids)
+#     except Exception as e:
+#         print(e)
 
 
 class ErrorDispute(BaseModel):
@@ -615,6 +634,12 @@ class GetDisputesRequest(BaseModel):
 
 def get_user_report(user_id:str):
     logger.debug("fetching user data")
+    vector_store = Chroma(
+        collection_name=f"{request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
     results = vector_store.get(
         where={
             "$and": [
@@ -749,6 +774,14 @@ from utils.get_credit_repo_data import get_credit_repo_data
 def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    vector_store = Chroma(
+        collection_name=f"{request.user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+
     results = vector_store.get(
         where={
             "$and": [
@@ -951,7 +984,7 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
     return response
 
 
-insert_general_knowledge()
+# insert_general_knowledge()
 
 if __name__=="__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
