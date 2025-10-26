@@ -688,7 +688,7 @@ def get_user_report(user_id:str):
     for k, v in reemplazos.items():
         report = report.replace(k, v)
 
-    logger.debug("user_report: ", report)
+    logger.error("user_report: ", report)
 
     return report
 
