@@ -843,7 +843,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     elif request.round == 3:
         template = third_round_template
     
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(model="gpt-5-mini")
 
     equifax_errors = [
         error for error in request.errors
