@@ -717,6 +717,215 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     {report}
     """
 
+    return [
+        {
+            "reason": "La colección está reportada 'al día' y con la fecha de última actividad (2022-01-01) anterior a la fecha de apertura (2022-01-19); información inexacta.",
+            "error": "Estado y fechas de colección incorrectos",
+            "account_number": "820279XXXXXXXX",
+            "name_account": "RNN/BERNDT & ASSOC",
+            "name_inquiry": None,
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del reporte o corrección integral por información inexacta."
+        },
+        {
+            "reason": "La colección de RNN/BERNDT & ASSOC solo aparece en Experian y no en Equifax ni TransUnion; inconsistencia entre burós.",
+            "error": "Colección inconsistente entre burós",
+            "account_number": "820279XXXXXXXX",
+            "name_account": "RNN/BERNDT & ASSOC",
+            "name_inquiry": None,
+            "credit_repo": [
+            "Experian",
+            "Equifax",
+            "TransUnion"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar verificación y eliminación en Experian si no puede ser validada de forma consistente."
+        },
+        {
+            "reason": "La misma hipoteca aparece múltiples veces en Experian con el mismo número de cuenta pero saldos y límites distintos (posible duplicado).",
+            "error": "Cuenta hipotecaria duplicada/múltiples reportes inconsistentes",
+            "account_number": "300632XXXX",
+            "name_account": "CBA",
+            "name_inquiry": None,
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Eliminar entradas duplicadas y mantener una sola línea verificada con datos correctos."
+        },
+        {
+            "reason": "La misma cuenta aparece duplicada en Experian con diferentes límites (7600 vs 8600) y fechas de actividad distintas.",
+            "error": "Cuenta duplicada e inconsistente",
+            "account_number": "526010XXXX",
+            "name_account": "NOWCOM/POZITIV AUTO SA",
+            "name_inquiry": None,
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Eliminar la entrada duplicada y corregir datos."
+        },
+        {
+            "reason": "Fecha de última actividad (2016-10-01) es anterior a la fecha de apertura (2021-04-27).",
+            "error": "Fecha de última actividad/apertura incorrecta",
+            "account_number": "134834XX",
+            "name_account": "NOWCOM/NEW YORK MOTORC",
+            "name_inquiry": None,
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Corregir las fechas o eliminar la línea si no se valida."
+        },
+        {
+            "reason": "Consulta dura no autorizada o sin cuenta abierta resultante.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "CONSUMER INF",
+            "credit_repo": [
+            "TransUnion"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "CITI CARDS CBSDNA",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "CITIGROUP RISK SYSTE",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Múltiples consultas recientes sin apertura de cuenta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "WELLS FARGO",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Múltiples consultas (incluye posibles duplicados en días consecutivos) sin apertura de cuenta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "WELLS FARGO BANK, N.",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "WELLS FARGO BANK MIN",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "WELLS FARGO BANK NV",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "FLORIDA POWER & LIGH",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "SPRINTNEXTEL- LONG D",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "RDO FINANCIAL SERVIC",
+            "credit_repo": [
+            "Equifax"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "NOWCOM/STATEBURG AUTO",
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        },
+        {
+            "reason": "Consulta dura sin cuenta nueva abierta asociada.",
+            "error": "Inquiry no autorizado/no resultó en cuenta",
+            "account_number": None,
+            "name_account": None,
+            "name_inquiry": "700CR/ACURA OF BROOKLY",
+            "credit_repo": [
+            "Experian"
+            ],
+            "inquiry_id": None,
+            "action": "Solicitar eliminación del inquiry del reporte."
+        }
+    ]
+
     llm = ChatOpenAI(model="gpt-5")
     structured_llm = llm.with_structured_output(ErrorsDispute)
     response = structured_llm.invoke(prompt)
