@@ -668,13 +668,8 @@ def get_user_report(user_id:str):
 
 @app.post("/get-disputes")
 def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
-    
-    logger.error("Entro a la peticion")
-    
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
-    
-    logger.error("Paso el api key")
 
     report = get_user_report(request.user_id)
 
@@ -721,10 +716,13 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     
     {report}
     """
-    
+
     llm = ChatOpenAI(model="gpt-5")
     structured_llm = llm.with_structured_output(ErrorsDispute)
     response = structured_llm.invoke(prompt)
+
+    logger.error("Devolvio la data")
+
     return response.errors
 
 import re
