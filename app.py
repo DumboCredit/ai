@@ -633,7 +633,6 @@ class GetDisputesRequest(BaseModel):
     user_id: str
 
 def get_user_report(user_id:str):
-    logger.debug("fetching user data")
     vector_store = Chroma(
         collection_name=f"{user_id}_credit_collection",
         embedding_function=embeddings,
@@ -655,8 +654,6 @@ def get_user_report(user_id:str):
         },  # filter by user_id tag/metadata
         limit=None  # or a very high number if None is not supported
     )
-
-    logger.debug("fetched user data")
 
     disputes = results['documents']
 
@@ -691,7 +688,7 @@ def get_user_report(user_id:str):
     for k, v in reemplazos.items():
         report = report.replace(k, v)
 
-    logger.debug("return user data")
+    logger.debug("user_report: ", report)
 
     return report
 
