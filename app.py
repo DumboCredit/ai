@@ -267,11 +267,18 @@ async def add_user_credit_data(historic_credit:CreditRequest):
 
             for liability in historic_credit.CREDIT_LIABILITY:
                 content = get_liability_content(liability)
-                documents.append(Document(
-                    page_content= content,
-                    metadata={"source": "CreditLiability", "field": "liability", "date": liability.PAYMENT_PATTERN.StartDate, "user_id": historic_credit.USER_ID },
-                    id=liability.CreditLiabilityID,
-                ))
+                if liability.PAYMENT_PATTERN:
+                    documents.append(Document(
+                        page_content= content,
+                        metadata={"source": "CreditLiability", "field": "liability", "date": liability.PAYMENT_PATTERN.StartDate, "user_id": historic_credit.USER_ID },
+                        id=liability.CreditLiabilityID,
+                    ))
+                else:
+                    documents.append(Document(
+                        page_content= content,
+                        metadata={"source": "CreditLiability", "field": "liability", "user_id": historic_credit.USER_ID },
+                        id=liability.CreditLiabilityID,
+                    ))
 
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store = Chroma(

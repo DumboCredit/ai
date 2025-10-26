@@ -85,7 +85,7 @@ class _CREDIT_LIABILITY(BaseModel):
     AccountStatusType: Optional[str] = None
     HighCreditAmount: Optional[str] = None
     TermsSourceType: Optional[str] = None
-    PAYMENT_PATTERN: _PAYMENT_PATTERN
+    PAYMENT_PATTERN: Optional[_PAYMENT_PATTERN] = None
     PastDueAmount: Optional[str] = None
     AccountIdentifier: Optional[str] = None
     TradelineHashComplex: Optional[str] = None
