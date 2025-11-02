@@ -677,6 +677,8 @@ def get_user_report(user_id:str):
     report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
                 r"Nombre: \1 \2 \3\nNacimiento: \4", report, flags=re.S)
 
+    report = report.replace("Consulta: ", "Todas mis consultas:\n", 1)
+
     reemplazos = {
         " Tipo de Consulta: HARD;": "",
         "Fecha de apertura de la cuenta:": "Abierta el:",
@@ -694,7 +696,8 @@ def get_user_report(user_id:str):
         "Codigo Postal ": "",
         "Calle ": "",
         "Cantidad de Pago Mensual: 0": "Sin Pago Mensual",
-        "Cantidad de Pago Mensual:": "Pago mensual:"
+        "Cantidad de Pago Mensual:": "Pago mensual:",
+        "Consulta: ": ""
     }
     for k, v in reemplazos.items():
         report = report.replace(k, v)
@@ -704,11 +707,14 @@ def get_user_report(user_id:str):
     return report
 
 @app.post("/get-disputes")
-def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
+def get_disputes(request:GetDisputesRequest):
+# -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
     report = get_user_report(request.user_id)
+
+    return report
     
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
@@ -827,6 +833,8 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     city = ""
     state = ""
     postal_code = ""
+    bdate = ""
+    ssn = ""
 
     for line in personal_info:
         if "Residiendo Actualmente" in line:
@@ -835,8 +843,16 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
             postal_code = re.search(r"Codigo Postal (\d+)", line).group(1)
             address = re.search(r"Calle ([^;]+)", line).group(1)
             break
+        if "Mi Fecha de nacimiento es: " in line:
+            bdate = re.search(r": (.+)$", line).group(1)
+        if "Mi SSN es: " in line:
+            ssn = re.search(r": (.+)$", line).group(1)
 
-    header = "\n".join([full_name, address, f"{city}, {state}, {postal_code}", curr_date]) + "\n"
+    header = "\n".join([full_name, address, f"{city}, {state} {postal_code}"]) + "\n"
+
+    # DOB: [bdate]    SSN: [ss_number]
+    if request.round == 1:
+        header += f"\nDOB: {bdate}    SSN: {ssn}\n\n"
 
     footer = f"\nSincerely,\n\n{full_name}"
 
@@ -847,7 +863,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     elif request.round == 3:
         template = third_round_template
     
-    llm = ChatOpenAI(model="gpt-5-mini")
+    llm = ChatOpenAI(model="gpt-5")
 
     equifax_errors = [
         error for error in request.errors
@@ -909,7 +925,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
 
             letters.append({
                 'repo': error['repo'],
-                'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\n\n{response.content}\n{footer}'
+                'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate:{curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
             })
 
 

@@ -16,6 +16,8 @@ Please investigate and take a look at these accounts:
 I don't know why these companies are putting this on my credit report. I have never been delinquent on my payments with any of these people. When I called them they said I needed to just dispute it with you.
 
 I need you folks to fix these accounts. In the meantime, I may be denied based on all of this. I've already tried two places. Please don't leave it this way I need your help! The above accounts should be reported as positive standing I thank you for your time.
+
+P.S. I attached my proof of ID, my SSN and DOB because your website said to. Thank you,I would be very happy to get this fixed!!
 """
 
 second_round_template = """
