@@ -40,7 +40,7 @@ class _CREDIT_INQUIRY(BaseModel):
     PurposeType: Optional[str] = None
     Date: str
     Name: str
-    RawIndustryText: str
+    RawIndustryText: Optional[str] = None
     CreditInquiryID: str
     CREDIT_REPOSITORY: CREDIT_REPOSITORY
 
