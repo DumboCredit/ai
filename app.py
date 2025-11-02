@@ -677,8 +677,6 @@ def get_user_report(user_id:str):
     report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
                 r"Nombre: \1 \2 \3\nNacimiento: \4", report, flags=re.S)
 
-    report = report.replace("Consulta: ", "Todas mis consultas:\n", 1)
-
     reemplazos = {
         " Tipo de Consulta: HARD;": "",
         "Fecha de apertura de la cuenta:": "Abierta el:",
@@ -696,8 +694,7 @@ def get_user_report(user_id:str):
         "Codigo Postal ": "",
         "Calle ": "",
         "Cantidad de Pago Mensual: 0": "Sin Pago Mensual",
-        "Cantidad de Pago Mensual:": "Pago mensual:",
-        "Consulta: ": ""
+        "Cantidad de Pago Mensual:": "Pago mensual:"
     }
     for k, v in reemplazos.items():
         report = report.replace(k, v)
