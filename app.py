@@ -80,7 +80,11 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if os.getenv("API_KEY") != historic_credit.API_KEY:
             raise HTTPException(status_code=400, detail="Api key dont match")
         documents = []
-         # load personal data
+
+        # log the request
+        logger.error(f"Adding user credit data for user", historic_credit)
+         
+        # load personal data
         if not historic_credit.BORROWER is None and not historic_credit.BORROWER.FirstName is None:
             documents.append(
                 Document(
