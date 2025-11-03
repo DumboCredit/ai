@@ -704,15 +704,12 @@ def get_user_report(user_id:str):
     return report
 
 @app.post("/get-disputes")
-def get_disputes(request:GetDisputesRequest):
-# -> list[ErrorDispute]:
+def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
     report = get_user_report(request.user_id)
 
-    return report
-    
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
     1. **Comparación de colecciones en los tres burós:**
