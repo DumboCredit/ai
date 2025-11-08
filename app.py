@@ -503,6 +503,7 @@ class DocumentType(str, Enum):
     bank_account_statement = "Estado de cuenta bancaria"
     lease = "Contrato de arrendamiento"
     letter = "Carta"
+    SSN = "SSN"
     misc = "Otro"
 
 class GenericDocumentField(BaseModel):
