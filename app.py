@@ -635,6 +635,7 @@ class ErrorDispute(BaseModel):
     name_inquiry: Optional[str] = Field(description="El nombre del inquiry asociado en caso de ser un inquiry");
     credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
+    inquiry_date: Optional[str] = Field(description="La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd");
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
 
 class ErrorsDispute(BaseModel):
@@ -673,6 +674,8 @@ def get_user_report(user_id:str):
 
     report = "\n".join([dispute for dispute in disputes])
 
+    total_characters = len(report)
+
     report = re.sub(pattern_account_id, '', report).strip()
 
     report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
@@ -681,7 +684,7 @@ def get_user_report(user_id:str):
     reemplazos = {
         " Tipo de Consulta: HARD;": "",
         "Fecha de apertura de la cuenta:": "Abierta el:",
-        "Fecha de ultima actividad:": "Ultima actividad el:",
+        "Fecha de ultima actividad:": "Ultima actividad:",
         "Pagos atrasados: 0.0": "Sin pagos atrasados",
         "Queda el: 0.0% para pagar de este prestamo": "Pagado por completo",
         "Buro de Credito": "Buro",
@@ -695,12 +698,28 @@ def get_user_report(user_id:str):
         "Codigo Postal ": "",
         "Calle ": "",
         "Cantidad de Pago Mensual: 0": "Sin Pago Mensual",
-        "Cantidad de Pago Mensual:": "Pago mensual:"
+        "Cantidad de Pago Mensual:": "Pago mensual:",
+        "Limite crediticio:": "LimiteCr:",
+        "Pagado por completo. Sin pagos atrasados. Sin Pago Mensual. Estado: OK.": "Pagado por completo. Sin atrasos.",
+        "para pagar de este prestamo": "por pagar",
+        "Pagado por completo. LimiteCr: 0. Sin pagos atrasados. Sin Pago Mensual. Estado: OK.": "Pagado por completo. Sin atrasos. LimiteCr: 0.",
+        "Responsabilidad:": "Resp.",
+        "Numero de cuenta:": "Num. cuenta:"
     }
     for k, v in reemplazos.items():
         report = report.replace(k, v)
 
-    logger.error("user_report: ", report)
+
+    # Redondear decimales a 2 decimales
+    def round_decimals(match):
+        num = float(match.group())
+        return f"{num:.2f}"  # redondea a 2 decimales
+
+    report = re.sub(r'(\d+\.\d+)', round_decimals, report)
+
+    total_characters_after = len(report)
+
+    logger.error(f"Total de caracteres antes: {total_characters}, Total de caracteres despues: {total_characters_after}, Diferencia: {total_characters - total_characters_after}")
 
     return report
 
@@ -738,6 +757,7 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     - El numero de cuenta asociado en caso de ser una cuenta(account_number)
     - El nombre de cuenta asociado en caso de ser una cuenta(name_account)
     - El nombre del inquiry asociado en caso de ser un inquiry(name_inquiry)
+    - La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd(inquiry_date)
     - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, en formato de lista(credit_repo)
     - El identificador del inquiry en caso de ser un inquiry(inquiry_id)
     - La accion a tomar por el usuario(action)
@@ -954,6 +974,31 @@ class RepoError(BaseModel):
 class VerifyErrorsResponse(BaseModel):
     still_on_report: list[RepoError] = Field(description="Si esta o no el error, separado por reporte");
 
+def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
+    error_string = ""
+    if isinstance(error, ErrorDisputeWithId) and isinstance(error.id, str):
+        error_string += f"Identificador del error: {error.id}\n"
+    if isinstance(error.name_account, str):
+        error_string += f"Nombre de la cuenta: {error.name_account}\n"
+    if isinstance(error.account_number, str):
+        error_string += f"Numero de la cuenta: {error.account_number}\n"
+    if isinstance(error.name_inquiry, str):
+        error_string += f"Nombre del inquiry: {error.name_inquiry}\n"
+    if isinstance(error.inquiry_id, str):
+        error_string += f"Identificador del inquiry: {error.name_inquiry}\n"
+
+    if isinstance(error.credit_repo, str):
+        error_string += f"Buro de credito: {error.credit_repo}\n"
+    else:
+        error_string += f"Buros de credito: {", ".join([repo for repo in error.credit_repo])}\n"
+
+    if isinstance(error.reason, str):
+        error_string += f"Rason de la disputa: {error.reason}"
+    if isinstance(error.error, str):
+        error_string += f"Error en cuestion: {error.error}"
+
+    return error_string
+
 @app.post("/verify-errors")
 def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
@@ -966,26 +1011,9 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
 
     for error in request.errors:
         errors += f"{i}- "
-        if isinstance(error.id, str):
-            errors += f"Identificador del error: {error.id}\n"
-        if isinstance(error.name_account, str):
-            errors += f"Nombre de la cuenta: {error.name_account}\n"
-        if isinstance(error.account_number, str):
-            errors += f"Numero de la cuenta: {error.account_number}\n"
-        if isinstance(error.name_inquiry, str):
-            errors += f"Nombre del inquiry: {error.name_inquiry}\n"
-        if isinstance(error.inquiry_id, str):
-            errors += f"Identificador del inquiry: {error.name_inquiry}\n"
-
-        if isinstance(error.credit_repo, str):
-            errors += f"Buro de credito: {error.credit_repo}\n"
-        else:
-            errors += f"Buros de credito: {", ".join([repo for repo in error.credit_repo])}\n"
-
-        if isinstance(error.reason, str):
-            errors += f"Rason de la disputa: {error.reason}"
-        if isinstance(error.error, str):
-            errors += f"Error en cuestion: {error.error}"
+        errors += get_error_string(error)
+        errors += "\n"
+        i += 1
 
 
     prompt = f"""
@@ -999,6 +1027,47 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
 
     llm = ChatOpenAI(model="gpt-5")
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
+    response = structured_llm.invoke(prompt)
+    return response
+
+class CompareErrorsRequest(BaseModel):
+    errors_1: list[ErrorDispute]
+    errors_2: list[ErrorDisputeWithId]
+    API_KEY: str
+
+class CompareErrorsResponse(BaseModel):
+    same_errors_ids: list[str]
+
+@app.post("/compare-errors")
+def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    errors_1_string = ""
+    errors_2_string = ""
+
+    for error in request.errors_1:
+        errors_1_string += get_error_string(error)
+        errors_1_string += "\n"
+    for error in request.errors_2:
+        errors_2_string += get_error_string(error)
+        errors_2_string += "\n"
+
+    prompt = f"""
+        Eres un sistema de comparacion de errores en el credito, debes comparar los siguientes errores y devolver los identificadores de los errores que sean los mismos en ambos errores:
+        Ten en cuenta que si los errores son de diferentes burós, no son los mismos errores.
+        Si existen datos como fecha de apertura, fecha de ultima actividad, balance, etc, que sean diferentes, no son los mismos errores.
+        Si el error es un inquiry aunque tenga el mismo nombre, si tiene diferente fecha de solicitud, no son los mismos errores.
+        
+        Errores 1:
+        {errors_1_string}
+        Errores 2:
+        {errors_2_string}
+        Devuelve un JSON con un array same_errors_ids con los identificadores de los errores que sean los mismos en ambos errores.
+    """
+
+    llm = ChatOpenAI(model="gpt-5")
+    structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
 
