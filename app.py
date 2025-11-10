@@ -878,7 +878,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     elif request.round == 3:
         template = third_round_template
     
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(model="gpt-5-mini")
 
     equifax_errors = [
         error for error in request.errors
@@ -1066,7 +1066,7 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
         Devuelve un JSON con un array same_errors_ids con los identificadores de los errores que sean los mismos en ambos errores.
     """
 
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(model="gpt-5-mini")
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
