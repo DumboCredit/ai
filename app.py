@@ -866,8 +866,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     header = "\n".join([full_name, address, f"{city}, {state} {postal_code}"]) + "\n"
 
     # DOB: [bdate]    SSN: [ss_number]
-    if request.round == 1:
-        header += f"\nDOB: {bdate}    SSN: {ssn}\n\n"
+    header += f"\nDOB: {bdate}    SSN: {ssn}\n\n"
 
     footer = f"\nSincerely,\n\n{full_name}"
 
@@ -1064,6 +1063,7 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
         Errores 2:
         {errors_2_string}
         Devuelve un JSON con un array same_errors_ids con los identificadores de los errores que sean los mismos en ambos errores.
+        Solo compara si estan en dos listados diferentes, si estan en el mismo listado repetidos no.
     """
 
     llm = ChatOpenAI(model="gpt-5-mini")
