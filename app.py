@@ -35,6 +35,19 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 credit_db_dir = "./credit_db"
 
+# Helper function para obtener vector store (reutiliza conexiones)
+def get_vector_store(user_id: str) -> Chroma:
+    """
+    Obtiene o crea una instancia de Chroma para un usuario específico.
+    Reutiliza la conexión cuando es posible.
+    """
+    return Chroma(
+        collection_name=f"{user_id}_credit_collection",
+        embedding_function=embeddings,
+        persist_directory=credit_db_dir,
+        collection_metadata={"hnsw:space": "cosine"},
+    )
+
 
 # env vars
 
@@ -285,12 +298,11 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     ))
 
         uuids = [str(uuid4()) for _ in range(len(documents))]
-        vector_store = Chroma(
-            collection_name=f"{historic_credit.USER_ID}_credit_collection",
-            embedding_function=embeddings,
-            persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-            collection_metadata={"hnsw:space": "cosine"},
-        )
+        vector_store = get_vector_store(historic_credit.USER_ID)
+        response = vector_store.get(where={"user_id": historic_credit.USER_ID})
+        if len(response['documents']) > 0:
+            vector_store.delete(where={"user_id": historic_credit.USER_ID})
+
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
   
@@ -319,12 +331,7 @@ async def query(query_request:QueryRequest) -> QueryResponse:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
-    vector_store = Chroma(
-        collection_name=f"{query_request.user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(query_request.user_id)
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
@@ -385,12 +392,7 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = Chroma(
-        collection_name=f"{query_request.user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(query_request.user_id)
     
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
@@ -464,12 +466,7 @@ async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = Chroma(
-        collection_name=f"{request.user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(request.user_id)
     response = vector_store.get(where={"user_id": request.user_id})
     if len(response['documents']) > 0:
         return "ok"
@@ -486,12 +483,7 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = Chroma(
-        collection_name=f"{request.user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(request.user_id)
     vector_store.delete(where={"user_id": request.user_id})
     return "ok"
 
@@ -646,12 +638,7 @@ class GetDisputesRequest(BaseModel):
     user_id: str
 
 def get_user_report(user_id:str):
-    vector_store = Chroma(
-        collection_name=f"{user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(user_id)
     results = vector_store.get(
         where={
             "$and": [
@@ -800,16 +787,12 @@ class GenerateLetterResponse(BaseModel):
 from utils.get_credit_repo_data import get_credit_repo_data
     
 @app.post("/generate-letter")
-def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
+def generate_letter(request:GenerateLetterRequest):
+# -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = Chroma(
-        collection_name=f"{request.user_id}_credit_collection",
-        embedding_function=embeddings,
-        persist_directory=credit_db_dir,  # Where to save data locally, remove if not necessary
-        collection_metadata={"hnsw:space": "cosine"},
-    )
+    vector_store = get_vector_store(request.user_id)
 
     results = vector_store.get(
         where={
@@ -870,13 +853,6 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    if request.round == 1:
-        template = first_round_template
-    elif request.round == 2:
-        template = second_round_template
-    elif request.round == 3:
-        template = third_round_template
-    
     llm = ChatOpenAI(model="gpt-5-mini")
 
     equifax_errors = [
@@ -923,13 +899,12 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
         if len(error['errors']):
             repo_data = get_credit_repo_data(error['repo'])
 
-            prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter strictly following this example/template:
-
-            Start of example/template:
-
-            {template}
-
-            End of example/template;
+            prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
+           
+            Write the body of a dispute letter to TransUnion for the {request.round}th round of disputes. 
+            Do NOT include any header, footer, contact information, dates, or signatures. 
+            Only output the body text of the letter.
+            The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
 
             Do not output anything except the completed letter text. Use the following input data:
 
