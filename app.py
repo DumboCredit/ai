@@ -787,8 +787,7 @@ class GenerateLetterResponse(BaseModel):
 from utils.get_credit_repo_data import get_credit_repo_data
     
 @app.post("/generate-letter")
-def generate_letter(request:GenerateLetterRequest):
-# -> GenerateLetterResponse:
+def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
@@ -905,7 +904,8 @@ def generate_letter(request:GenerateLetterRequest):
             Do NOT include any header, footer, contact information, dates, or signatures. 
             Only output the body text of the letter.
             The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
-
+            The letter should be written on english.
+            The letter should be written in a professional tone.
             Do not output anything except the completed letter text. Use the following input data:
 
             Errors: {error['errors']}"""
