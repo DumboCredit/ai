@@ -855,7 +855,16 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     llm = ChatOpenAI(model="gpt-5-mini")
 
     equifax_errors = [
-        error for error in request.errors
+        {
+            'reason': error.reason,
+            'error': error.error,
+            'account_number': error.account_number,
+            'name_account': error.name_account,
+            'name_inquiry': error.name_inquiry,
+            'inquiry_id': error.inquiry_id,
+            'inquiry_date': error.inquiry_date,
+            'action': error.action,
+        } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "Equifax" in error.credit_repo)
             or (isinstance(error.credit_repo, str) and "Equifax" in error.credit_repo)
@@ -863,14 +872,32 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     ]
 
     experian_errors = [
-        error for error in request.errors
+        {
+            'reason': error.reason,
+            'error': error.error,
+            'account_number': error.account_number,
+            'name_account': error.name_account,
+            'name_inquiry': error.name_inquiry,
+            'inquiry_id': error.inquiry_id,
+            'inquiry_date': error.inquiry_date,
+            'action': error.action,
+        } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "Experian" in error.credit_repo)
             or (isinstance(error.credit_repo, str) and "Experian" in error.credit_repo)
         )
     ]
     transunion_errors = [
-        error for error in request.errors
+        {
+            'reason': error.reason,
+            'error': error.error,
+            'account_number': error.account_number,
+            'name_account': error.name_account,
+            'name_inquiry': error.name_inquiry,
+            'inquiry_id': error.inquiry_id,
+            'inquiry_date': error.inquiry_date,
+            'action': error.action,
+        } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "TransUnion" in error.credit_repo)
             or (isinstance(error.credit_repo, str) and "TransUnion" in error.credit_repo)
@@ -906,6 +933,7 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
             The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
             The letter should be written on english.
             The letter should be written in a professional tone.
+            The letter is for {error["repo"]} bureau, but dont introduce the letter like Dear bereau or anything like that , its just for you know the context.
             Do not output anything except the completed letter text. Use the following input data:
 
             Errors: {error['errors']}"""
