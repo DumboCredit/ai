@@ -934,8 +934,10 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
             The letter should be written on english.
             The letter should be written in a professional tone.
             The letter is for {error["repo"]} bureau, but dont introduce the letter like Dear bereau or anything like that , its just for you know the context.
+            Do not mention any bureau unless it is necessary to reference data in the errors themselves
+            However, you ARE allowed to reference any credit bureaus that appear inside the provided Errors data, but remember, the letter is for {error["repo"]} and the letter must NOT request or demand any actions from credit bureaus other than {error["repo"]}. 
+            If the errors mention Experian, Equifax, or TransUnion, include those names exactly as they appear.
             Do not output anything except the completed letter text. Use the following input data:
-
             Errors: {error['errors']}"""
 
             response = llm.invoke(prompt)
