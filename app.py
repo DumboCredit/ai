@@ -26,6 +26,8 @@ from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents
+import json
+import asyncio
 
 
 from langchain_openai import OpenAIEmbeddings
@@ -93,9 +95,6 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if os.getenv("API_KEY") != historic_credit.API_KEY:
             raise HTTPException(status_code=400, detail="Api key dont match")
         documents = []
-
-        # log the request
-        logger.error(f"Adding user credit data for user", historic_credit)
          
         # load personal data
         if not historic_credit.BORROWER is None and not historic_credit.BORROWER.FirstName is None:
@@ -706,12 +705,20 @@ def get_user_report(user_id:str):
 
     total_characters_after = len(report)
 
-    logger.error(f"Total de caracteres antes: {total_characters}, Total de caracteres despues: {total_characters_after}, Diferencia: {total_characters - total_characters_after}")
-
     return report
 
+
+def normalize_repos_to_set(data):
+    if data is None:
+        return set()
+    if isinstance(data, str):
+        # Si es string, lo metemos en un set directamente
+        return {data} 
+    # Si es lista, la convertimos a set
+    return set(data)
+
 @app.post("/get-disputes")
-def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
+async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
@@ -719,25 +726,28 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
 
     prompt = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
-    1. **Comparación de colecciones en los tres burós:**
+    1. Comparación de colecciones en los tres burós:
         - Compara la información de las colecciones reportadas por los tres burós.
         - Verifica que los saldos, las fechas y los estados sean idénticos. Si no es así, genera una disputa.
-    2. **Verificación de información errónea:**
-        - **Balance incorrecto:** Si el balance de la deuda registrado es erróneo, marca este dato para ser disputado.
-        - **Fecha incorrecta:** Verifica que las fechas de la última actividad y la fecha de apertura sean correctas. Si alguna de estas fechas está equivocada, se debe disputar.
-        - **Fecha de última actividad:** Esta fecha debe ser precisa. Si no lo es, disputa el dato.
-    3. **Estado de la colección:**
-        - **Colección abierta incorrectamente:** Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
-    4. **Colección duplicada:**
+    2. Verificación de información errónea:
+        - Balance incorrecto: Si el balance de la deuda registrado es erróneo, marca este dato para ser disputado.
+        - Fecha incorrecta: Verifica que las fechas de la última actividad y la fecha de apertura sean correctas. Si alguna de estas fechas está equivocada, se debe disputar.
+        - Fecha de última actividad: Esta fecha debe ser precisa. Si no lo es, disputa el dato.
+    3. Estado de la colección:
+        - Colección abierta incorrectamente: Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
+    4. Colección duplicada:
         - Si una misma colección está reportada en más de un buró, o si aparece duplicada dentro del mismo buró, se debe disputar la eliminación de la entrada duplicada.
-    5. **Colección y cuenta original abiertas simultáneamente:**
+    5. Colección y cuenta original abiertas simultáneamente:
         - Si una cuenta original está abierta y tiene una colección asociada abierta, se debe disputar para corregir esta incongruencia. Ambas no deberían estar abiertas al mismo tiempo.
-    6. **Marcas negativas a buscar:**
-    MARCAS NEGATIVAS:
-    Late payments: cuando en una cuenta se han hecho pagos fuera de tiempo aparece historial de pago tarde, pueden ser por 30, 60, 90, 120, 150 o 180 días. Las marcas de pago tarde se quedan en el reporte aunque la deuda se pague e incluso si la cuenta se cierra. En el caso de estas marcas negativas se trabaja solo el historial de pago tarde, no la cuenta completa. 
-    Collection/Charge off: cuando una cuenta llega a los 180 o más días de pago tarde, los creditores la marcan como collection o charge off, es decir ya no solo se debe la cantidad que está como “pago tarde” sino el balance completo de la cuenta. En esos casos las líneas de crédito se cierran. Las marcas de collection o charge off son las que más afectan al crédito y en estos casos se disputa la cuenta completa con el fin de que se elimine del todo sin que se tenga que pagar. En los casos donde no se eliminen las colecciones después de 3 rondas de disputa seguidas, se presenta al cliente la alternativa de buscar acuerdos de pago, para que esa cuenta aparezca con balance $0 y de esa forma deje de afectar el crédito. 
-    Repossession: cuando un préstamo de carro no es pagado se marca como repossession, en cuestiones del crédito es parecido a una colección, con la diferencia de que el balance que se reporta en deuda es el que queda después de que el banco recupera el auto, lo subastan y lo que ganan en la subasta lo descuentan de la deuda total. Suelen ser un poco más complicadas de eliminar y de obtener acuerdos de pago. 
-    Inquiries: marcas que dejan las revisiones que hacen los bancos antes de autorizar un préstamo o una línea de crédito. En la reparación solo se pueden trabajar los que correspondan a cuentas marcadas como cerradas o que no se hayan autorizado, es decir no aparezcan en el reporte de crédito, es recomendable esperar un mes para disputar un nuevo inquiry porque a veces pueden tardar una semanas
+    6. Inquiries que no corresponden a cuentas abiertas:
+        - Si una inquiry no corresponde a una cuenta abierta, se debe disputar para corregir esta incongruencia.
+        - Los nombres de las cuentas asociadas a las inquiries no tienen que ser exactamente iguales.
+        - No puedes disputar las inquiries que corresponden a cuentas abiertas.
+    7. Manejo de Marcas Negativas:
+        - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
+        - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
+        - Inquiries: Disputar si NO CORRESPONDEN a una cuenta abierta o si la cuenta está cerrada.
+
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - Rason por la q el usuario quiere disputar(reason)
     - El error en cuestion(error)
@@ -745,17 +755,47 @@ def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     - El nombre de cuenta asociado en caso de ser una cuenta(name_account)
     - El nombre del inquiry asociado en caso de ser un inquiry(name_inquiry)
     - La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd(inquiry_date)
-    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, en formato de lista(credit_repo)
+    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
     - El identificador del inquiry en caso de ser un inquiry(inquiry_id)
     - La accion a tomar por el usuario(action)
-    Los informes de los tres burós se encuentran a continuación:
-    
-    {report}
+
+    Devuelve el resultado en el esquema JSON de Pydantic para el objeto ErrorsDispute.
     """
+
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report}"}
+    ]
     llm = ChatOpenAI(model="gpt-5")
     structured_llm = llm.with_structured_output(ErrorsDispute)
-    response = structured_llm.invoke(prompt)
-    return response.errors
+
+    tasks = [structured_llm.ainvoke(messages)]
+
+    responses = await asyncio.gather(*tasks)
+
+    return responses[0].errors
+
+    unique_errors = {}
+
+    for response in responses:
+        for error in response.errors:
+            unique_key = (
+                error.name_inquiry, 
+                error.inquiry_date, 
+                error.account_number, 
+                error.name_account
+            )
+
+            if unique_key not in unique_errors:
+                unique_errors[unique_key] = error
+            else:
+                existing = unique_errors[unique_key]
+                current_repos_set = normalize_repos_to_set(existing.credit_repo)
+                new_repos_set = normalize_repos_to_set(error.credit_repo)
+                merged_repos = current_repos_set | new_repos_set
+                existing.credit_repo = sorted(list(merged_repos))
+
+    return list(unique_errors.values())
 
 import re
 from datetime import date
@@ -785,7 +825,6 @@ class GenerateLetterResponse(BaseModel):
     sender: PersonalInfo
 
 from utils.get_credit_repo_data import get_credit_repo_data
-import asyncio
 
 async def get_letter_content(llm, error, request, header, footer, curr_date):
     repo_data = get_credit_repo_data(error['repo'])
@@ -878,7 +917,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5-mini")
+    llm = ChatOpenAI(model="gpt-5.1")
 
     equifax_errors = [
         {
@@ -1080,7 +1119,7 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
         Solo compara si estan en dos listados diferentes, si estan en el mismo listado repetidos no.
     """
 
-    llm = ChatOpenAI(model="gpt-5-mini")
+    llm = ChatOpenAI(model="gpt-5.1")
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
