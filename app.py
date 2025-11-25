@@ -848,7 +848,7 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
 
     return {
         'repo': error['repo'],
-        'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate:{curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
+        'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate: {curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
     }
     
 @app.post("/generate-letter")
