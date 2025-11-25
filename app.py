@@ -785,9 +785,35 @@ class GenerateLetterResponse(BaseModel):
     sender: PersonalInfo
 
 from utils.get_credit_repo_data import get_credit_repo_data
+import asyncio
+
+async def get_letter_content(llm, error, request, header, footer, curr_date):
+    repo_data = get_credit_repo_data(error['repo'])
+
+    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
+    Write the body of a dispute letter to TransUnion for the {request.round}th round of disputes. 
+    Do NOT include any header, footer, contact information, dates, or signatures. 
+    Only output the body text of the letter.
+    The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
+    The letter should be written on english.
+    The letter should be written in a professional tone.
+    The letter is for {error["repo"]} bureau, but dont introduce the letter like Dear bereau or anything like that , its just for you know the context.
+    Do not mention any bureau unless it is necessary to reference data in the errors themselves
+    However, you ARE allowed to reference any credit bureaus that appear inside the provided Errors data, but remember, the letter is for {error["repo"]} and the letter must NOT request or demand any actions from credit bureaus other than {error["repo"]}. 
+    If the errors mention Experian, Equifax, or TransUnion, include those names exactly as they appear.
+    
+    Do not output anything except the completed letter text. Use the following input data:
+    Errors: {error['errors']}"""
+
+    response = await llm.ainvoke(prompt)
+
+    return {
+        'repo': error['repo'],
+        'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate:{curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
+    }
     
 @app.post("/generate-letter")
-def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
+async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
@@ -920,32 +946,15 @@ def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     ]
 
     letters = []
+    tasks = []
 
     for error in error_list:
         if len(error['errors']):
-            repo_data = get_credit_repo_data(error['repo'])
+            tasks.append(
+                get_letter_content(llm, error, request, header, footer, curr_date)
+            )
 
-            prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
-           
-            Write the body of a dispute letter to TransUnion for the {request.round}th round of disputes. 
-            Do NOT include any header, footer, contact information, dates, or signatures. 
-            Only output the body text of the letter.
-            The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
-            The letter should be written on english.
-            The letter should be written in a professional tone.
-            The letter is for {error["repo"]} bureau, but dont introduce the letter like Dear bereau or anything like that , its just for you know the context.
-            Do not mention any bureau unless it is necessary to reference data in the errors themselves
-            However, you ARE allowed to reference any credit bureaus that appear inside the provided Errors data, but remember, the letter is for {error["repo"]} and the letter must NOT request or demand any actions from credit bureaus other than {error["repo"]}. 
-            If the errors mention Experian, Equifax, or TransUnion, include those names exactly as they appear.
-            Do not output anything except the completed letter text. Use the following input data:
-            Errors: {error['errors']}"""
-
-            response = llm.invoke(prompt)
-
-            letters.append({
-                'repo': error['repo'],
-                'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate:{curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
-            })
+    letters = await asyncio.gather(*tasks)
 
 
     return {
