@@ -917,7 +917,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5.1")
+    llm = ChatOpenAI(model="gpt-5-mini")
 
     equifax_errors = [
         {
@@ -1119,7 +1119,7 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
         Solo compara si estan en dos listados diferentes, si estan en el mismo listado repetidos no.
     """
 
-    llm = ChatOpenAI(model="gpt-5.1")
+    llm = ChatOpenAI(model="gpt-5-mini")
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
