@@ -299,6 +299,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         uuids = [str(uuid4()) for _ in range(len(documents))]
         vector_store = get_vector_store(historic_credit.USER_ID)
         response = vector_store.get(where={"user_id": historic_credit.USER_ID})
+
         if len(response['documents']) > 0:
             vector_store.delete(where={"user_id": historic_credit.USER_ID})
 
@@ -628,6 +629,7 @@ class ErrorDispute(BaseModel):
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
     inquiry_date: Optional[str] = Field(description="La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd");
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
+    creditor: Optional[str] = Field(description="Acreedor de la cuenta en caso de ser una cuenta")
 
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
@@ -636,41 +638,20 @@ class GetDisputesRequest(BaseModel):
     API_KEY: str
     user_id: str
 
-def get_user_report(user_id:str):
-    vector_store = get_vector_store(user_id)
-    results = vector_store.get(
-        where={
-            "$and": [
-                {"user_id": user_id},
-                {"source": {"$ne": "CreditSummary"}},
-                {"source": {"$ne": "CreditScore"}},
-                {"field": {"$ne": "SSN"}},
-                {"field": {"$ne": "credit_cards"}},
-                {"field": {"$ne": "auto_loans"}},
-                {"field": {"$ne": "education_loans"}},
-                {"field": {"$ne": "mortgage_loans"}}
-            ]
-        },  # filter by user_id tag/metadata
-        limit=None  # or a very high number if None is not supported
-    )
-
-    disputes = results['documents']
-
+def get_clean_report(report: str):
     pattern_account_id = r'ID de la cuenta:\s*[a-fA-F0-9]{32}\.'
 
-    report = "\n".join([dispute for dispute in disputes])
-
-    total_characters = len(report)
-
     report = re.sub(pattern_account_id, '', report).strip()
+
+    report = re.sub(r"(Fecha de apertura de la cuenta:\s*\d{4}-\d{2}-\d{2}\.\s*)|(Fecha de ultima actividad:\s*\d{4}-\d{2}-\d{2}\.\s*)", "", report)
 
     report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
                 r"Nombre: \1 \2 \3\nNacimiento: \4", report, flags=re.S)
 
+    report = re.sub(r"Responsabilidad:\s*(.*?)\.", "", report)
+
     reemplazos = {
         " Tipo de Consulta: HARD;": "",
-        "Fecha de apertura de la cuenta:": "Abierta el:",
-        "Fecha de ultima actividad:": "Ultima actividad:",
         "Pagos atrasados: 0.0": "Sin pagos atrasados",
         "Queda el: 0.0% para pagar de este prestamo": "Pagado por completo",
         "Buro de Credito": "Buro",
@@ -689,12 +670,11 @@ def get_user_report(user_id:str):
         "Pagado por completo. Sin pagos atrasados. Sin Pago Mensual. Estado: OK.": "Pagado por completo. Sin atrasos.",
         "para pagar de este prestamo": "por pagar",
         "Pagado por completo. LimiteCr: 0. Sin pagos atrasados. Sin Pago Mensual. Estado: OK.": "Pagado por completo. Sin atrasos. LimiteCr: 0.",
-        "Responsabilidad:": "Resp.",
-        "Numero de cuenta:": "Num. cuenta:"
+        "Numero de cuenta:": "Num. cuenta:",
+        "Tipo/Fuente: Provided.": "",
     }
     for k, v in reemplazos.items():
         report = report.replace(k, v)
-
 
     # Redondear decimales a 2 decimales
     def round_decimals(match):
@@ -703,7 +683,65 @@ def get_user_report(user_id:str):
 
     report = re.sub(r'(\d+\.\d+)', round_decimals, report)
 
-    total_characters_after = len(report)
+    return report
+
+def get_user_report(user_id:str, split: bool = False):
+    vector_store = get_vector_store(user_id)
+    results = vector_store.get(
+        where={
+            "$and": [
+                {"user_id": user_id},
+                {"source": {"$ne": "CreditSummary"}},
+                {"source": {"$ne": "CreditScore"}},
+                {"source": {"$ne": "Personal Info"}},
+                {"field": {"$ne": "SSN"}},
+                {"field": {"$ne": "credit_cards"}},
+                {"field": {"$ne": "auto_loans"}},
+                {"field": {"$ne": "education_loans"}},
+                {"field": {"$ne": "mortgage_loans"}}
+            ]
+        },  # filter by user_id tag/metadata
+        limit=None  # or a very high number if None is not supported
+    )
+
+    disputes = results['documents']
+
+    if split:
+        report_inquiries = "\n".join([dispute for dispute in disputes if 'Consulta' in dispute])
+        # add creditor and account name to the report_inquiries
+        report_inquiries = report_inquiries + "\n" + "Cuentas involucradas: "
+
+        # get the creditor name from "Nombre del acreedor: <name>" to "." and is closed indicator
+        account_creditor_names = ", ".join([
+            re.search(r"Nombre del acreedor:\s*(.*?)\.", dispute).group(1)
+            + (" (" + re.search(r"La cuenta esta\s*(.*?)\.", dispute).group(1) + "). " if re.search(r"La cuenta esta\s*(.*?)\.", dispute) else " (abierta). ")
+            for dispute in disputes if 'Consulta' not in dispute
+        ])
+        report_inquiries = report_inquiries + "\n" + account_creditor_names
+
+        report_accounts = "\n".join([dispute for dispute in disputes if 'Consulta' not in dispute])
+        
+        # report_accounts = []
+        # for dispute in [dispute for dispute in disputes if 'Consulta' not in dispute]:
+        #     number_account = re.search(r"Numero de cuenta:\s*(.*?)\.", dispute).group(1).replace("X", "")
+        #     # if number_account is not on report_accounts, add it
+        #     iidx_on_report_accounts = -1
+        #     for idx, report_account in enumerate(report_accounts):
+        #         number_account2 = re.search(r"Numero de cuenta:\s*(.*?)\.", report_account).group(1).replace("X", "")
+        #         if number_account == number_account2:
+        #             iidx_on_report_accounts = idx
+        #             break
+        #     if iidx_on_report_accounts == -1:
+        #         report_accounts.append(dispute)
+        #     else:
+        #         report_accounts[iidx_on_report_accounts] = report_accounts[iidx_on_report_accounts] + "\n" + dispute
+        
+        # report_accounts = [get_clean_report(report_account) for report_account in report_accounts]
+
+        return get_clean_report(report_inquiries), get_clean_report(report_accounts)
+
+    report = "\n".join([dispute for dispute in disputes])
+    report = get_clean_report(report)
 
     return report
 
@@ -718,84 +756,89 @@ def normalize_repos_to_set(data):
     return set(data)
 
 @app.post("/get-disputes")
-async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
+async def get_disputes(request:GetDisputesRequest):
+# -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    report = get_user_report(request.user_id)
+    report_inquiries, report_accounts = get_user_report(request.user_id, split=True)
 
-    prompt = f"""
-    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
-    1. Comparación de colecciones en los tres burós:
-        - Compara la información de las colecciones reportadas por los tres burós.
-        - Verifica que los saldos, las fechas y los estados sean idénticos. Si no es así, genera una disputa.
-    2. Verificación de información errónea:
-        - Balance incorrecto: Si el balance de la deuda registrado es erróneo, marca este dato para ser disputado.
-        - Fecha incorrecta: Verifica que las fechas de la última actividad y la fecha de apertura sean correctas. Si alguna de estas fechas está equivocada, se debe disputar.
-        - Fecha de última actividad: Esta fecha debe ser precisa. Si no lo es, disputa el dato.
-    3. Estado de la colección:
-        - Colección abierta incorrectamente: Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
-    4. Colección duplicada:
-        - Si una misma colección está reportada en más de un buró, o si aparece duplicada dentro del mismo buró, se debe disputar la eliminación de la entrada duplicada.
-    5. Colección y cuenta original abiertas simultáneamente:
-        - Si una cuenta original está abierta y tiene una colección asociada abierta, se debe disputar para corregir esta incongruencia. Ambas no deberían estar abiertas al mismo tiempo.
-    6. Inquiries que no corresponden a cuentas abiertas:
+    prompt_inquiries = f"""
+    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) y detectar posibles errores relacionados únicamente con las inquiries.
+
+    Acciones a realizar:
+    1. Inquiries que no corresponden a cuentas abiertas:
         - Si una inquiry no corresponde a una cuenta abierta, se debe disputar para corregir esta incongruencia.
         - Los nombres de las cuentas asociadas a las inquiries no tienen que ser exactamente iguales.
         - No puedes disputar las inquiries que corresponden a cuentas abiertas.
-    7. Manejo de Marcas Negativas:
-        - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
-        - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
-        - Inquiries: Disputar si NO CORRESPONDEN a una cuenta abierta o si la cuenta está cerrada.
+    2. Manejo de Inquiries:
+        - Disputar si NO CORRESPONDEN a una cuenta abierta o si la cuenta asociada está cerrada.
 
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - Rason por la q el usuario quiere disputar(reason)
     - El error en cuestion(error)
-    - El numero de cuenta asociado en caso de ser una cuenta(account_number)
-    - El nombre de cuenta asociado en caso de ser una cuenta(name_account)
-    - El nombre del inquiry asociado en caso de ser un inquiry(name_inquiry)
-    - La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd(inquiry_date)
+    - El nombre del inquiry asociado si es un inquiry(name_inquiry)
+    - La fecha de solicitud del inquiry si es un inquiry, en formato yyyy-mm-dd(inquiry_date)
     - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
-    - El identificador del inquiry en caso de ser un inquiry(inquiry_id)
+    - El identificador del inquiry si es un inquiry(inquiry_id)
     - La accion a tomar por el usuario(action)
-
-    Devuelve el resultado en el esquema JSON de Pydantic para el objeto ErrorsDispute.
     """
 
-    messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report}"}
+    prompt_accounts = f"""
+    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
+    1. Comparación de colecciones en los tres burós:
+        - Compara la información de las colecciones reportadas por los tres burós.
+        - Verifica que los saldos y los estados sean idénticos. Si no es así, genera una disputa.
+    2. Estado de la colección:
+        - Colección abierta incorrectamente: Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
+    3. Colección y cuenta original abiertas simultáneamente:
+        - Si una cuenta original está abierta y tiene una colección asociada abierta, se debe disputar para corregir esta incongruencia. Ambas no deberían estar abiertas al mismo tiempo.
+    4. Manejo de Marcas Negativas:
+        - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
+        - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
+
+    Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
+    - Rason por la q el usuario quiere disputar(reason)
+    - El error en cuestion(error)
+    - El numero de cuenta asociado(account_number)
+    - El nombre de cuenta asociado, solo el nombre, no el tipo de cuenta(name_account)
+    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
+    - La accion a tomar por el usuario(action)
+    - Acreedor de la cuenta, el nombre exacto como aparece en el reporte(creditor)
+    """
+    messages_inquiries = [
+        {"role": "system", "content": prompt_inquiries},
+        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_inquiries}"}
     ]
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(
+        model="gpt-5.1",
+        reasoning_effort="none",
+        temperature=0,
+    )
     structured_llm = llm.with_structured_output(ErrorsDispute)
 
-    tasks = [structured_llm.ainvoke(messages)]
+    messages_accounts = [
+        {"role": "system", "content": prompt_accounts},
+        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_accounts}"}
+    ]
+
+    tasks = [structured_llm.ainvoke(messages_inquiries), structured_llm.ainvoke(messages_accounts)]
+
+    # for report_account in report_accounts:
+    #     messages_accounts = [
+    #         {"role": "system", "content": prompt_accounts},
+    #         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_account}"}
+    #     ]
+    #     tasks.append(structured_llm.ainvoke(messages_accounts))
 
     responses = await asyncio.gather(*tasks)
 
-    return responses[0].errors
-
-    unique_errors = {}
+    errors = []
 
     for response in responses:
-        for error in response.errors:
-            unique_key = (
-                error.name_inquiry, 
-                error.inquiry_date, 
-                error.account_number, 
-                error.name_account
-            )
+        errors.extend(response.errors)
 
-            if unique_key not in unique_errors:
-                unique_errors[unique_key] = error
-            else:
-                existing = unique_errors[unique_key]
-                current_repos_set = normalize_repos_to_set(existing.credit_repo)
-                new_repos_set = normalize_repos_to_set(error.credit_repo)
-                merged_repos = current_repos_set | new_repos_set
-                existing.credit_repo = sorted(list(merged_repos))
-
-    return list(unique_errors.values())
+    return errors
 
 import re
 from datetime import date
@@ -1077,7 +1120,7 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
         {report}
     """
 
-    llm = ChatOpenAI(model="gpt-5")
+    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="high")
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response

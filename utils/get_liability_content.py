@@ -44,6 +44,11 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
             content += f"Estado de la cuenta: {get_translation(libCC.CURRENT_RATING.Type)}. "
         elif not libCC.AccountStatusType is None:
             content += f"Estado de la cuenta: {get_translation(libCC.AccountStatusType)}. "
+    if not libCC.IsClosedIndicator is None:
+        if libCC.IsClosedIndicator == "Y":
+            content += f"La cuenta esta cerrada. "
+        else:
+            content += f"La cuenta esta abierta. "
     if not libCC.PastDueAmount is None:
         content += f"Importe Vencido: {libCC.PastDueAmount}. "
     if not libCC.AccountIdentifier is None:
@@ -64,8 +69,6 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
         content += f"Tipo de Fuente de Plazo: {libCC.RawIndustryText}. "
     if not libCC.HighCreditAmount is None:
         content += f"Saldo alto: {libCC.HighCreditAmount}. "
-    if not libCC.CreditLimitAmount is None: 
-        content += f"Limite crediticio: {libCC.CreditLimitAmount}. "
     if not libCC.CREDITOR.Name is None:
         content += f"Nombre del acreedor: {libCC.CREDITOR.Name}. "
     if not libCC.TradelineHashComplex is None:

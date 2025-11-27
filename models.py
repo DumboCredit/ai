@@ -98,6 +98,7 @@ class _CREDIT_LIABILITY(BaseModel):
     HIGHEST_ADVERSE_RATING: Optional[_HIGHEST_ADVERSE_RATING] = None
     IsChargeoffIndicator: Optional[str] = None
     IsCollectionIndicator: Optional[str] = None
+    IsClosedIndicator: Optional[str] = None
 
 # request
 class CreditRequest(BaseModel):
