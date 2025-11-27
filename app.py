@@ -29,7 +29,6 @@ from utils.prompts import scan_documents
 import json
 import asyncio
 
-
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 
@@ -618,12 +617,16 @@ async def paraphrase_letter(request: ParaphraseLetterRequest):
 #     except Exception as e:
 #         print(e)
 
+class ErrorTypeEnum(str, Enum):
+    COLLECTION = "Collection"
+    CHARGE_OFF = "Charge off"
+    REPOSSESSION = "Repossession"
 
 class ErrorDispute(BaseModel):
     reason: str  = Field(description="Rason por la q el usuario quiere disputar");
-    error: str  = Field(description="El error en cuestion");
+    error: Union[ErrorTypeEnum, str] = Field(description="El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente, si no poner una descripcion del error");
     account_number: Optional[str]  = Field(description="El numero de cuenta asociado en caso de ser una cuenta");
-    name_account: Optional[str] = Field(description="El nombre de cuenta asociado en caso de ser una cuenta");
+    name_account: Optional[str] = Field(description="El nombre de cuenta o acredor asociado en caso de ser una cuenta");
     name_inquiry: Optional[str] = Field(description="El nombre del inquiry asociado en caso de ser un inquiry");
     credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
@@ -799,9 +802,9 @@ async def get_disputes(request:GetDisputesRequest):
 
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - Rason por la q el usuario quiere disputar(reason)
-    - El error en cuestion(error)
+    - El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente(error)
     - El numero de cuenta asociado(account_number)
-    - El nombre de cuenta asociado, solo el nombre, no el tipo de cuenta(name_account)
+    - El nombre de cuenta asociado o el acreedor exacto como aparece en el reporte, nunca el tipo de cuenta(name_account)
     - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
     - La accion a tomar por el usuario(action)
     - Acreedor de la cuenta, el nombre exacto como aparece en el reporte(creditor)
@@ -854,6 +857,17 @@ class Letter(BaseModel):
     repo: str
     letter: str
 
+class Address(BaseModel):
+    address: str = Field(description="The address of the creditor")
+    city: str = Field(description="The city of the creditor")
+    state: str = Field(description="The state of the creditor (two letter code)")
+    zip_code: str = Field(description="The zip code of the creditor")
+
+class LetterCreditor(BaseModel):
+    creditor: str = Field(description="The name of the creditor")
+    letter: str = Field(description="The letter to be sent to the creditor")
+    to: Address = Field(description="The address of the creditor")
+
 class PersonalInfo(BaseModel):
     first_name: str
     middle_name: str
@@ -865,6 +879,7 @@ class PersonalInfo(BaseModel):
 
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
+    letters_creditor: list[LetterCreditor]
     sender: PersonalInfo
 
 from utils.get_credit_repo_data import get_credit_repo_data
@@ -893,7 +908,37 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
         'repo': error['repo'],
         'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate: {curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
     }
+
+async def get_creditor_information(creditor, llm):
+    prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the address, city, state (two letter code), and zip code information about the creditor.
+    Creditor: {creditor}"""
+    structured_llm = llm.with_structured_output(Address)
+    final_structured = await structured_llm.ainvoke(prompt)
+    return final_structured
+
+async def get_letter_content_creditor(llm, error, creditor, request, header, footer, curr_date) -> LetterCreditor:
+    prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
+    Write the body of a dispute letter to {creditor} for the {request.round}th round of disputes. 
+    Do NOT include any header, footer, contact information, dates, or signatures. 
+    Only output the body text of the letter.
+    The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
+    The letter should be written on english.
     
+    The letter is for {creditor}, but dont introduce the letter like Dear "Creditor Name" or anything like that , its just for you know the context.
+    Do not mention any bureau unless it is necessary to reference data in the errors themselves    
+    Do not output anything except the completed letter text. Use the following input data:
+    Errors: {error}"""
+
+    response = await llm.ainvoke(prompt)
+
+    creditor_information = await get_creditor_information(creditor, llm)
+
+    return {
+        'creditor': creditor,
+        'to': creditor_information,
+        'letter': f'{header}\n{creditor}\n{creditor_information.address}\n{creditor_information.city}, {creditor_information.state}, {creditor_information.zip_code}\n\nDate: {curr_date}\n\nDear {creditor},\n\n{response.content}\n{footer}'
+    }
+
 @app.post("/generate-letter")
 async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
@@ -1027,20 +1072,40 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
         }
     ]
 
-    letters = []
+    letters_generated = []
     tasks = []
+
+    # get charge-of and collections errors
 
     for error in error_list:
         if len(error['errors']):
             tasks.append(
                 get_letter_content(llm, error, request, header, footer, curr_date)
             )
+    
+    for error in error_list:
+        if len(error['errors']) > 0:
+            for error_item in error['errors']:
+                if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
+                    tasks.append(
+                        get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
+                    )
 
-    letters = await asyncio.gather(*tasks)
+
+    letters_generated = await asyncio.gather(*tasks)
+    letters = []
+    letters_creditor = []
+
+    for letter in letters_generated:
+        if 'repo' in letter:
+            letters.append(letter)
+        elif 'creditor' in letter:
+            letters_creditor.append(letter)
 
 
     return {
         'letters': letters,
+        'letters_creditor': letters_creditor,
         'sender': {
             'first_name': first_name,
             'middle_name': middle_name,
