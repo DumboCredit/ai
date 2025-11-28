@@ -909,8 +909,10 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
         'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate: {curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
     }
 
-async def get_creditor_information(creditor, llm):
-    prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the address, city, state (two letter code), and zip code information about the creditor.
+async def get_creditor_information(creditor, error):
+    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="high")
+    prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute: 
+    {error}
     Creditor: {creditor}"""
     structured_llm = llm.with_structured_output(Address)
     final_structured = await structured_llm.ainvoke(prompt)
@@ -931,7 +933,7 @@ async def get_letter_content_creditor(llm, error, creditor, request, header, foo
 
     response = await llm.ainvoke(prompt)
 
-    creditor_information = await get_creditor_information(creditor, llm)
+    creditor_information = await get_creditor_information(creditor, error)
 
     return {
         'creditor': creditor,

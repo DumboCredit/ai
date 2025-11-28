@@ -71,6 +71,14 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
         content += f"Saldo alto: {libCC.HighCreditAmount}. "
     if not libCC.CREDITOR.Name is None:
         content += f"Nombre del acreedor: {libCC.CREDITOR.Name}. "
+    if not libCC.CREDITOR.City is None:
+        content += f"Ciudad del acreedor: {libCC.CREDITOR.City}. "
+    if not libCC.CREDITOR.State is None:
+        content += f"Estado del acreedor: {libCC.CREDITOR.State}. "
+    if not libCC.CREDITOR.PostalCode is None:
+        content += f"Codigo postal del acreedor: {libCC.CREDITOR.PostalCode}. "
+    if not libCC.CREDITOR.StreetAddress is None:
+        content += f"Direccion del acreedor: {libCC.CREDITOR.StreetAddress}. "
     if not libCC.TradelineHashComplex is None:
         content += f"ID de la cuenta: {libCC.TradelineHashComplex}. "
     if isinstance(libCC.CREDIT_REPOSITORY, list):

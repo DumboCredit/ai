@@ -55,6 +55,10 @@ class CREDIT_SUMMARY(BaseModel):
 # credit liability
 class _CREDITOR(BaseModel):
     Name: str
+    City: Optional[str] = None
+    State: Optional[str] = None
+    PostalCode: Optional[str] = None
+    StreetAddress: Optional[str] = None
 
 class _PAYMENT_PATTERN(BaseModel):
     StartDate: str
