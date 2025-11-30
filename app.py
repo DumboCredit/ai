@@ -632,7 +632,7 @@ class ErrorDispute(BaseModel):
     inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
     inquiry_date: Optional[str] = Field(description="La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd");
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
-    creditor: Optional[str] = Field(description="Acreedor de la cuenta en caso de ser una cuenta")
+    creditor: Optional[str] = Field(default=None, description="Acreedor de la cuenta en caso de ser una cuenta")
 
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
@@ -759,8 +759,7 @@ def normalize_repos_to_set(data):
     return set(data)
 
 @app.post("/get-disputes")
-async def get_disputes(request:GetDisputesRequest):
-# -> list[ErrorDispute]:
+async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
