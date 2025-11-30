@@ -878,7 +878,7 @@ class PersonalInfo(BaseModel):
 
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
-    letters_creditor: list[LetterCreditor]
+    # letters_creditor: list[LetterCreditor]
     sender: PersonalInfo
 
 from utils.get_credit_repo_data import get_credit_repo_data
@@ -1084,29 +1084,29 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
                 get_letter_content(llm, error, request, header, footer, curr_date)
             )
     
-    for error in error_list:
-        if len(error['errors']) > 0:
-            for error_item in error['errors']:
-                if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
-                    tasks.append(
-                        get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
-                    )
+    # for error in error_list:
+    #     if len(error['errors']) > 0:
+    #         for error_item in error['errors']:
+    #             if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
+    #                 tasks.append(
+    #                     get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
+    #                 )
 
 
-    letters_generated = await asyncio.gather(*tasks)
-    letters = []
-    letters_creditor = []
+    # letters_generated = await asyncio.gather(*tasks)
+    letters = await asyncio.gather(*tasks)
+    # letters_creditor = []
 
-    for letter in letters_generated:
-        if 'repo' in letter:
-            letters.append(letter)
-        elif 'creditor' in letter:
-            letters_creditor.append(letter)
+    # for letter in letters_generated:
+    #     if 'repo' in letter:
+    #         letters.append(letter)
+    #     elif 'creditor' in letter:
+    #         letters_creditor.append(letter)
 
 
     return {
         'letters': letters,
-        'letters_creditor': letters_creditor,
+        # 'letters_creditor': letters_creditor,
         'sender': {
             'first_name': first_name,
             'middle_name': middle_name,
