@@ -622,6 +622,13 @@ class ErrorTypeEnum(str, Enum):
     CHARGE_OFF = "Charge off"
     REPOSSESSION = "Repossession"
 
+class Address(BaseModel):
+    company_name: str = Field(description="The name of the company or creditor")
+    address: str = Field(description="The address of the creditor")
+    city: str = Field(description="The city of the creditor")
+    state: str = Field(description="The state of the creditor (two letter code)")
+    zip_code: str = Field(description="The zip code of the creditor")
+
 class ErrorDispute(BaseModel):
     reason: str  = Field(description="Rason por la q el usuario quiere disputar");
     error: Union[ErrorTypeEnum, str] = Field(description="El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente, si no poner una descripcion del error");
@@ -633,6 +640,7 @@ class ErrorDispute(BaseModel):
     inquiry_date: Optional[str] = Field(description="La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd");
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
     creditor: Optional[str] = Field(default=None, description="Acreedor de la cuenta en caso de ser una cuenta")
+    creditor_data: Optional[Address] = Field(default=None, description="La direccion del acreedor y su nombre en caso de ser una cuenta")
 
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
@@ -856,16 +864,10 @@ class Letter(BaseModel):
     repo: str
     letter: str
 
-class Address(BaseModel):
-    address: str = Field(description="The address of the creditor")
-    city: str = Field(description="The city of the creditor")
-    state: str = Field(description="The state of the creditor (two letter code)")
-    zip_code: str = Field(description="The zip code of the creditor")
-
 class LetterCreditor(BaseModel):
     creditor: str = Field(description="The name of the creditor")
     letter: str = Field(description="The letter to be sent to the creditor")
-    to: Address = Field(description="The address of the creditor")
+    to: Address = Field(description="The address of the creditor and the company name")
 
 class PersonalInfo(BaseModel):
     first_name: str
@@ -878,7 +880,7 @@ class PersonalInfo(BaseModel):
 
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
-    # letters_creditor: list[LetterCreditor]
+    letters_creditor: list[LetterCreditor]
     sender: PersonalInfo
 
 from utils.get_credit_repo_data import get_credit_repo_data
@@ -932,7 +934,12 @@ async def get_letter_content_creditor(llm, error, creditor, request, header, foo
 
     response = await llm.ainvoke(prompt)
 
-    creditor_information = await get_creditor_information(creditor, error)
+    creditor_information = None
+
+    if 'creditor_data' in error:
+        creditor_information = error['creditor_data']
+    else:
+        creditor_information = await get_creditor_information(creditor, error)
 
     return {
         'creditor': creditor,
@@ -1084,29 +1091,29 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
                 get_letter_content(llm, error, request, header, footer, curr_date)
             )
     
-    # for error in error_list:
-    #     if len(error['errors']) > 0:
-    #         for error_item in error['errors']:
-    #             if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
-    #                 tasks.append(
-    #                     get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
-    #                 )
+    for error in error_list:
+        if len(error['errors']) > 0:
+            for error_item in error['errors']:
+                if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
+                    tasks.append(
+                        get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
+                    )
 
 
-    # letters_generated = await asyncio.gather(*tasks)
-    letters = await asyncio.gather(*tasks)
-    # letters_creditor = []
+    letters_generated = await asyncio.gather(*tasks)
+    letters = []
+    letters_creditor = []
 
-    # for letter in letters_generated:
-    #     if 'repo' in letter:
-    #         letters.append(letter)
-    #     elif 'creditor' in letter:
-    #         letters_creditor.append(letter)
+    for letter in letters_generated:
+        if 'repo' in letter:
+            letters.append(letter)
+        elif 'creditor' in letter:
+            letters_creditor.append(letter)
 
 
     return {
         'letters': letters,
-        # 'letters_creditor': letters_creditor,
+        'letters_creditor': letters_creditor,
         'sender': {
             'first_name': first_name,
             'middle_name': middle_name,
