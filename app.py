@@ -780,7 +780,8 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     1. Inquiries que no corresponden a cuentas abiertas:
         - Si una inquiry no corresponde a una cuenta abierta, se debe disputar para corregir esta incongruencia.
         - Los nombres de las cuentas asociadas a las inquiries no tienen que ser exactamente iguales.
-        - No puedes disputar las inquiries que corresponden a cuentas abiertas.
+        - No puedes disputar las inquiries que corresponden a cuentas abiertas, aunque no sean exactamente iguales los nombres de las cuentas asociadas a las inquiries.
+        - No disputes ningun otro error que no sea una inquiry que no corresponda a una cuenta abierta.
     2. Manejo de Inquiries:
         - Disputar si NO CORRESPONDEN a una cuenta abierta o si la cuenta asociada está cerrada.
 
