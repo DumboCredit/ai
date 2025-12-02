@@ -919,7 +919,7 @@ async def get_creditor_information(creditor, error):
     final_structured = await structured_llm.ainvoke(prompt)
     return final_structured
 
-async def get_letter_content_creditor(llm, error, creditor, request, header, footer, curr_date) -> LetterCreditor:
+async def get_letter_content_creditor(llm, errors, creditor, creditor_data, request, header, footer, curr_date) -> LetterCreditor:
     prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
     Write the body of a dispute letter to {creditor} for the {request.round}th round of disputes. 
     Do NOT include any header, footer, contact information, dates, or signatures. 
@@ -930,16 +930,16 @@ async def get_letter_content_creditor(llm, error, creditor, request, header, foo
     The letter is for {creditor}, but dont introduce the letter like Dear "Creditor Name" or anything like that , its just for you know the context.
     Do not mention any bureau unless it is necessary to reference data in the errors themselves    
     Do not output anything except the completed letter text. Use the following input data:
-    Errors: {error}"""
+    Errors: {errors}"""
 
     response = await llm.ainvoke(prompt)
 
     creditor_information = None
 
-    if 'creditor_data' in error:
-        creditor_information = error['creditor_data']
+    if creditor_data is not None:
+        creditor_information = creditor_data
     else:
-        creditor_information = await get_creditor_information(creditor, error)
+        creditor_information = await get_creditor_information(creditor, errors)
 
     return {
         'creditor': creditor,
@@ -1090,14 +1090,42 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             tasks.append(
                 get_letter_content(llm, error, request, header, footer, curr_date)
             )
+
+    if request.round > 3:
+        error_list_creditor = {}
     
-    for error in error_list:
-        if len(error['errors']) > 0:
-            for error_item in error['errors']:
-                if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
-                    tasks.append(
-                        get_letter_content_creditor(llm, error_item, error_item['creditor'] if 'creditor' in error_item else error_item['name_account'], request, header, footer, curr_date)
-                    )
+        for error in error_list:
+            if len(error['errors']) > 0:
+                for error_item in error['errors']:
+                    if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
+                        if error_item['creditor'] not in error_list_creditor:
+                            error_list_creditor[error_item['creditor']] = []
+                        error_list_creditor[error_item['creditor']].append(error_item)
+
+        for creditor, errors in error_list_creditor.items():
+            creditor = None
+            creditor_data = None
+            for error_item in errors:
+                if creditor is None:
+                    creditor = error_item['creditor'] if 'creditor' in error_item else error_item['name_account']
+                if creditor_data is None:
+                    creditor_data = error_item['creditor_data']
+                
+                if creditor is not None and creditor_data is not None:
+                    break
+
+            tasks.append(
+                get_letter_content_creditor(
+                    llm, 
+                    errors, 
+                    creditor, 
+                    creditor_data,
+                    request, 
+                    header, 
+                    footer, 
+                    curr_date
+                )
+            )
 
 
     letters_generated = await asyncio.gather(*tasks)
