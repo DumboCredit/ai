@@ -858,7 +858,7 @@ from utils.letter_templates import first_round_template, second_round_template, 
 class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
-    round: Literal[1, 2, 3]
+    round: int
     errors: list[ErrorDispute]
 
 class Letter(BaseModel):
