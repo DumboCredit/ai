@@ -1013,7 +1013,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5-mini")
+    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="medium")
 
     equifax_errors = [
         {
