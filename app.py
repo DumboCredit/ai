@@ -1098,7 +1098,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
         for error in error_list:
             if len(error['errors']) > 0:
                 for error_item in error['errors']:
-                    if error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]:
+                    if ('creditor' in error_item) and (error_item['error'] in [ErrorTypeEnum.COLLECTION, ErrorTypeEnum.CHARGE_OFF]):
                         if error_item['creditor'] not in error_list_creditor:
                             error_list_creditor[error_item['creditor']] = []
                         error_list_creditor[error_item['creditor']].append(error_item)
