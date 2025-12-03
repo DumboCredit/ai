@@ -942,10 +942,12 @@ async def get_letter_content_creditor(llm, errors, creditor, creditor_data, requ
     else:
         creditor_information = await get_creditor_information(creditor, errors)
 
+    creditor_name = creditor or creditor_information.company_name
+
     return {
-        'creditor': creditor,
+        'creditor': creditor_name,
         'to': creditor_information,
-        'letter': f'{header}\n{creditor}\n{creditor_information.address}\n{creditor_information.city}, {creditor_information.state}, {creditor_information.zip_code}\n\nDate: {curr_date}\n\nDear {creditor},\n\n{response.content}\n{footer}'
+        'letter': f'{header}\n{creditor_name}\n{creditor_information.address}\n{creditor_information.city}, {creditor_information.state}, {creditor_information.zip_code}\n\nDate: {curr_date}\n\nDear {creditor_name},\n\n{response.content}\n{footer}'
     }
 
 @app.post("/generate-letter")
@@ -1014,7 +1016,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="medium")
+    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="none")
 
     equifax_errors = [
         {
@@ -1144,7 +1146,6 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             letters.append(letter)
         elif 'creditor' in letter:
             letters_creditor.append(letter)
-
 
     return {
         'letters': letters,
