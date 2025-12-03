@@ -1026,6 +1026,8 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             'inquiry_id': error.inquiry_id,
             'inquiry_date': error.inquiry_date,
             'action': error.action,
+            'creditor': error.creditor, 
+            'creditor_data': error.creditor_data
         } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "Equifax" in error.credit_repo)
@@ -1043,6 +1045,8 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             'inquiry_id': error.inquiry_id,
             'inquiry_date': error.inquiry_date,
             'action': error.action,
+            'creditor': error.creditor, 
+            'creditor_data': error.creditor_data
         } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "Experian" in error.credit_repo)
@@ -1059,6 +1063,8 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             'inquiry_id': error.inquiry_id,
             'inquiry_date': error.inquiry_date,
             'action': error.action,
+            'creditor': error.creditor, 
+            'creditor_data': error.creditor_data
         } for error in request.errors
         if (
             (isinstance(error.credit_repo, list) and "TransUnion" in error.credit_repo)
