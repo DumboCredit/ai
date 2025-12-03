@@ -1108,9 +1108,9 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
             creditor_data = None
             for error_item in errors:
                 if creditor is None:
-                    creditor = error_item['creditor'] if 'creditor' in error_item else error_item['name_account']
+                    creditor = error_item.creditor if 'creditor' in error_item else error_item.name_account
                 if creditor_data is None:
-                    creditor_data = error_item['creditor_data']
+                    creditor_data = error_item.creditor_data
                 
                 if creditor is not None and creditor_data is not None:
                     break
