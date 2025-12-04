@@ -301,14 +301,15 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                         id=liability.CreditLiabilityID,
                     ))
 
-        uuids = [str(uuid4()) for _ in range(len(documents))]
-        vector_store = get_vector_store(historic_credit.USER_ID)
-        response = vector_store.get(where={"user_id": historic_credit.USER_ID})
 
         if get_collection_name(historic_credit.USER_ID) in [c.name for c in client.list_collections()]:
             client.delete_collection(name=get_collection_name(historic_credit.USER_ID))
 
+
+        uuids = [get_collection_name(historic_credit.USER_ID) + str(uuid4()) for _ in range(len(documents))]
+        vector_store = get_vector_store(historic_credit.USER_ID)
         vector_store.add_documents(documents=documents, ids=uuids)
+
         return "ok"
   
 # model
