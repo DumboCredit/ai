@@ -10,9 +10,9 @@ from fastapi.responses import JSONResponse
 from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
-from langchain.schema.messages import HumanMessage, SystemMessage, AIMessage
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_classic.chains import create_retrieval_chain
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Union, Literal
@@ -28,13 +28,18 @@ from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents
 import json
 import asyncio
-
+import chromadb
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 credit_db_dir = "./credit_db"
+
+client = chromadb.PersistentClient(path=credit_db_dir)
+
+def get_collection_name(user_id:str) -> str:
+    return f"{user_id}_credit_collection"
 
 # Helper function para obtener vector store (reutiliza conexiones)
 def get_vector_store(user_id: str) -> Chroma:
@@ -83,6 +88,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "detail": "An unexpected error occurred",
+            "error": str(exc),
             "path": request.url.path
         }
     )
@@ -299,8 +305,8 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         vector_store = get_vector_store(historic_credit.USER_ID)
         response = vector_store.get(where={"user_id": historic_credit.USER_ID})
 
-        if len(response['documents']) > 0:
-            vector_store.delete(where={"user_id": historic_credit.USER_ID})
+        if get_collection_name(historic_credit.USER_ID) in [c.name for c in client.list_collections()]:
+            client.delete_collection(name=get_collection_name(request.user_id))
 
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
@@ -465,9 +471,7 @@ async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = get_vector_store(request.user_id)
-    response = vector_store.get(where={"user_id": request.user_id})
-    if len(response['documents']) > 0:
+    if get_collection_name(request.user_id) in [c.name for c in client.list_collections()]:
         return "ok"
     else:
         raise HTTPException(status_code=404, detail="This user does'nt have credit data")
@@ -482,8 +486,8 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = get_vector_store(request.user_id)
-    vector_store.delete(where={"user_id": request.user_id})
+    client.delete_collection(name=get_collection_name(request.user_id))
+
     return "ok"
 
 class DocumentType(str, Enum):
@@ -697,8 +701,9 @@ def get_clean_report(report: str):
     return report
 
 def get_user_report(user_id:str, split: bool = False):
-    vector_store = get_vector_store(user_id)
-    results = vector_store.get(
+    collection = client.get_collection(name=get_collection_name(user_id))
+
+    results = collection.get(
         where={
             "$and": [
                 {"user_id": user_id},
@@ -955,9 +960,9 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    vector_store = get_vector_store(request.user_id)
+    collection = client.get_collection(name=get_collection_name(user_id))
 
-    results = vector_store.get(
+    results = collection.get(
         where={
             "$and": [
                 {"user_id": request.user_id},
