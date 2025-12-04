@@ -306,7 +306,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         response = vector_store.get(where={"user_id": historic_credit.USER_ID})
 
         if get_collection_name(historic_credit.USER_ID) in [c.name for c in client.list_collections()]:
-            client.delete_collection(name=get_collection_name(request.user_id))
+            client.delete_collection(name=get_collection_name(historic_credit.USER_ID))
 
         vector_store.add_documents(documents=documents, ids=uuids)
         return "ok"
@@ -960,7 +960,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    collection = client.get_collection(name=get_collection_name(user_id))
+    collection = client.get_collection(name=get_collection_name(request.user_id))
 
     results = collection.get(
         where={
