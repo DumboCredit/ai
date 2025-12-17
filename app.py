@@ -985,10 +985,6 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     city = ""
     state = ""
     postal_code = ""
-    
-    # other info for letter
-    bdate = ""
-    ssn = ""
 
     if request.sender:
         first_name = request.sender.first_name
@@ -1019,11 +1015,16 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
                 postal_code = re.search(r"Codigo Postal (\d+)", line).group(1)
                 address = re.search(r"Calle ([^;]+)", line).group(1)
                 break
-            if "Mi Fecha de nacimiento es: " in line:
-                bdate = re.search(r": (.+)$", line).group(1)
-            if "Mi SSN es: " in line:
-                ssn = re.search(r": (.+)$", line).group(1)
     
+    # other info for letter
+    bdate = ""
+    ssn = ""
+
+    for line in personal_info:
+        if "Mi Fecha de nacimiento es: " in line:
+            bdate = re.search(r": (.+)$", line).group(1)
+        if "Mi SSN es: " in line:
+            ssn = re.search(r": (.+)$", line).group(1)
 
     full_name = " ".join([first_name, middle_name, last_name]).strip()
 
