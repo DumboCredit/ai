@@ -828,7 +828,7 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_inquiries}"}
     ]
     llm = ChatOpenAI(
-        model="gpt-5.1",
+        model="gpt-5.2",
         reasoning_effort="none",
         temperature=0,
     )
@@ -901,7 +901,7 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
     Do NOT include any header, footer, contact information, dates, or signatures. 
     Only output the body text of the letter.
     The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
-    The letter should be written on english.
+    The letter should be written on english, its very important that the letter is written in english the content and every dispute item must be written in english.
     The letter should be written in a professional tone.
     The letter is for {error["repo"]} bureau, but dont introduce the letter like Dear bereau or anything like that , its just for you know the context.
     Do not mention any bureau unless it is necessary to reference data in the errors themselves
@@ -919,7 +919,7 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
     }
 
 async def get_creditor_information(creditor, error):
-    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="high")
+    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="high")
     prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute: 
     {error}
     Creditor: {creditor}"""
@@ -933,7 +933,7 @@ async def get_letter_content_creditor(llm, errors, creditor, creditor_data, requ
     Do NOT include any header, footer, contact information, dates, or signatures. 
     Only output the body text of the letter.
     The tone must escalate with each round, so third round must be the most aggressive, the second round must be more aggressive than the first round, and the first round must be the most polite.
-    The letter should be written on english.
+    The letter should be written on english, its very important that the letter is written in english the content and every dispute item must be written in english.
     
     The letter is for {creditor}, but dont introduce the letter like Dear "Creditor Name" or anything like that , its just for you know the context.
     Do not mention any bureau unless it is necessary to reference data in the errors themselves    
@@ -1038,7 +1038,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="none")
+    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="low")
 
     equifax_errors = [
         {
@@ -1251,7 +1251,7 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
         {report}
     """
 
-    llm = ChatOpenAI(model="gpt-5.1", reasoning_effort="high")
+    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="high")
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
