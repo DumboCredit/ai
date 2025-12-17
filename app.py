@@ -863,7 +863,7 @@ from utils.letter_templates import first_round_template, second_round_template, 
 
 class PersonalInfo(BaseModel):
     first_name: str
-    middle_name: str
+    middle_name: Optional[str] = None
     last_name: str
     address: str
     city: str
@@ -992,7 +992,10 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     if request.sender:
         first_name = request.first_name
-        middle_name = request.middle_name
+        
+        if request.middle_name:
+            middle_name = request.middle_name
+        
         last_name = request.last_name
         address = request.address
         city = request.city
