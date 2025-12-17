@@ -861,6 +861,15 @@ import re
 from datetime import date
 from utils.letter_templates import first_round_template, second_round_template, third_round_template
 
+class PersonalInfo(BaseModel):
+    first_name: str
+    middle_name: str
+    last_name: str
+    address: str
+    city: str
+    state: str
+    postal_code: str
+
 class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
@@ -876,15 +885,6 @@ class LetterCreditor(BaseModel):
     creditor: str = Field(description="The name of the creditor")
     letter: str = Field(description="The letter to be sent to the creditor")
     to: Address = Field(description="The address of the creditor and the company name")
-
-class PersonalInfo(BaseModel):
-    first_name: str
-    middle_name: str
-    last_name: str
-    address: str
-    city: str
-    state: str
-    postal_code: str
 
 class GenerateLetterResponse(BaseModel):
     letters: list[Letter]
