@@ -991,16 +991,16 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     ssn = ""
 
     if request.sender:
-        first_name = request.first_name
+        first_name = request.sender.first_name
         
-        if request.middle_name:
-            middle_name = request.middle_name
+        if request.sender.middle_name:
+            middle_name = request.sender.middle_name
         
-        last_name = request.last_name
-        address = request.address
-        city = request.city
-        state = request.state
-        postal_code = request.postal_code 
+        last_name = request.sender.last_name
+        address = request.sender.address
+        city = request.sender.city
+        state = request.sender.state
+        postal_code = request.sender.postal_code 
     else:
         for line in personal_info:
             if "primer nombre" in line:
