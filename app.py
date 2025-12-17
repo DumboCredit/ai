@@ -864,6 +864,7 @@ from utils.letter_templates import first_round_template, second_round_template, 
 class GenerateLetterRequest(BaseModel):
     API_KEY: str
     user_id: str
+    sender: Optional[PersonalInfo] = None
     round: int
     errors: list[ErrorDispute]
 
@@ -979,41 +980,52 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     first_name = ""
     middle_name = ""
     last_name = ""
-
-    for line in personal_info:
-        if "primer nombre" in line:
-            first_name = re.search(r": (.+)$", line).group(1)
-        elif "segundo nombre" in line:
-            match = re.search(r": (.+)$", line)
-            if match:
-                middle_name = match.group(1)
-        elif "apellido" in line:
-            last_name = re.search(r": (.+)$", line).group(1)
-
-    full_name = " ".join([first_name, middle_name, last_name]).strip()
-
-    # Obtener fecha actual
-    curr_date = date.today().isoformat()  # 'YYYY-MM-DD'
-
     # Extraer dirección actual
     address = ""
     city = ""
     state = ""
     postal_code = ""
+    
+    # other info for letter
     bdate = ""
     ssn = ""
 
-    for line in personal_info:
-        if "Residiendo Actualmente" in line:
-            city = re.search(r"Ciudad ([^,;]+)", line).group(1)
-            state = re.search(r"Estado (\w{2})", line).group(1)
-            postal_code = re.search(r"Codigo Postal (\d+)", line).group(1)
-            address = re.search(r"Calle ([^;]+)", line).group(1)
-            break
-        if "Mi Fecha de nacimiento es: " in line:
-            bdate = re.search(r": (.+)$", line).group(1)
-        if "Mi SSN es: " in line:
-            ssn = re.search(r": (.+)$", line).group(1)
+    if request.sender:
+        first_name = request.first_name
+        middle_name = request.middle_name
+        last_name = request.last_name
+        address = request.address
+        city = request.city
+        state = request.state
+        postal_code = request.postal_code 
+    else:
+        for line in personal_info:
+            if "primer nombre" in line:
+                first_name = re.search(r": (.+)$", line).group(1)
+            elif "segundo nombre" in line:
+                match = re.search(r": (.+)$", line)
+                if match:
+                    middle_name = match.group(1)
+            elif "apellido" in line:
+                last_name = re.search(r": (.+)$", line).group(1)
+
+        for line in personal_info:
+            if "Residiendo Actualmente" in line:
+                city = re.search(r"Ciudad ([^,;]+)", line).group(1)
+                state = re.search(r"Estado (\w{2})", line).group(1)
+                postal_code = re.search(r"Codigo Postal (\d+)", line).group(1)
+                address = re.search(r"Calle ([^;]+)", line).group(1)
+                break
+            if "Mi Fecha de nacimiento es: " in line:
+                bdate = re.search(r": (.+)$", line).group(1)
+            if "Mi SSN es: " in line:
+                ssn = re.search(r": (.+)$", line).group(1)
+    
+
+    full_name = " ".join([first_name, middle_name, last_name]).strip()
+
+    # Obtener fecha actual
+    curr_date = date.today().isoformat()  # 'YYYY-MM-DD'
 
     header = "\n".join([full_name, address, f"{city}, {state} {postal_code}"]) + "\n"
 
