@@ -482,7 +482,7 @@ class DeleteUserCreditDataRequest(BaseModel):
     user_id: str
 
 # endpoint to delete user credit data
-@app.delete("/delete-user-credit-data")
+@app.post("/delete-user-credit-data")
 async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
