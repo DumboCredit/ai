@@ -779,6 +779,9 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
 
     report_inquiries, report_accounts = get_user_report(request.user_id, split=True)
 
+    logger.error(f"Report inquiries: {report_inquiries}")
+    logger.error(f"Report accounts: {report_accounts}")
+
     prompt_inquiries = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) y detectar posibles errores relacionados únicamente con las inquiries.
 
