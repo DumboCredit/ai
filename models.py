@@ -25,7 +25,7 @@ class _POSITIVE_FACTOR(BaseModel):
     Text: str
 class _CREDIT_SCORE(BaseModel):
     Date: str
-    Value: str
+    Value: Union[int, str]
     CreditRepositorySourceType: str
     RiskBasedPricingMax: str
     RiskBasedPricingMin: str
@@ -64,9 +64,9 @@ class _PAYMENT_PATTERN(BaseModel):
     StartDate: str
 
 class _LATE_COUNT(BaseModel):
-    Days30: Optional[str] = None
-    Days60: Optional[str] = None
-    Days90: Optional[str] = None
+    Days30: Optional[Union[int, str]] = None
+    Days60: Optional[Union[int, str]] = None
+    Days90: Optional[Union[int, str]] = None
 
 class _HIGHEST_ADVERSE_RATING(BaseModel):
     Type: str
@@ -76,8 +76,8 @@ class _CURRENT_RATING(BaseModel):
 
 class _CREDIT_LIABILITY(BaseModel):
     CreditLiabilityID: str
-    OriginalBalanceAmount: Optional[str] = None
-    UnpaidBalanceAmount: Optional[str] = None
+    OriginalBalanceAmount: Optional[Union[int, str]] = None
+    UnpaidBalanceAmount: Optional[Union[int, str]] = None
     MonthlyPaymentAmount: Optional[str] = None
     TermsMonthsCount: Optional[str] = None
     MonthsReviewedCount: Optional[str] = None
@@ -87,7 +87,7 @@ class _CREDIT_LIABILITY(BaseModel):
     CREDITOR: _CREDITOR 
     RawIndustryText: Optional[str] = None
     AccountStatusType: Optional[str] = None
-    HighCreditAmount: Optional[str] = None
+    HighCreditAmount: Optional[Union[int, str]] = None
     TermsSourceType: Optional[str] = None
     PAYMENT_PATTERN: Optional[_PAYMENT_PATTERN] = None
     PastDueAmount: Optional[str] = None

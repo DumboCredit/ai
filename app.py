@@ -472,7 +472,8 @@ async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    if get_collection_name(request.user_id) in [c.name for c in client.list_collections()]:
+    # if the collection exists, and collection has documents, return ok
+    if (get_collection_name(request.user_id) in [c.name for c in client.list_collections()] and len(client.get_collection(name=get_collection_name(request.user_id)).get(where={"user_id": request.user_id})['documents']) > 0):
         return "ok"
     else:
         raise HTTPException(status_code=404, detail="This user does'nt have credit data")
