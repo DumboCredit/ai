@@ -651,9 +651,16 @@ class ErrorDispute(BaseModel):
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
 
+class ReasoningEffortEnum(str, Enum):
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
 class GetDisputesRequest(BaseModel):
     API_KEY: str
     user_id: str
+    reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.NONE, description="El nivel de razonamiento a usar")
 
 def get_clean_report(report: str):
     pattern_account_id = r'ID de la cuenta:\s*[a-fA-F0-9]{32}\.'
@@ -833,7 +840,7 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     ]
     llm = ChatOpenAI(
         model="gpt-5.2",
-        reasoning_effort="none",
+        reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
         temperature=0,
     )
     structured_llm = llm.with_structured_output(ErrorsDispute)
