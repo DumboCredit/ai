@@ -25,11 +25,11 @@ class _POSITIVE_FACTOR(BaseModel):
     Text: str
 class _CREDIT_SCORE(BaseModel):
     Date: str
-    Value: Union[int, str]
+    Value: Optional[Union[int, str]] = None
     CreditRepositorySourceType: str
-    RiskBasedPricingMax: str
-    RiskBasedPricingMin: str
-    RiskBasedPricingPercent: str
+    RiskBasedPricingMax: Optional[str] = None
+    RiskBasedPricingMin: Optional[str] = None
+    RiskBasedPricingPercent: Optional[str] = None
     FACTOR: Optional[list[_FACTOR]] = None
     POSITIVE_FACTOR: Optional[list[_POSITIVE_FACTOR]] = None
 

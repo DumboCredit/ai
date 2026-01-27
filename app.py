@@ -239,11 +239,12 @@ async def add_user_credit_data(historic_credit:CreditRequest):
             for i in historic_credit.CREDIT_SCORE:
                 credit_repository = i.CreditRepositorySourceType
                 date_of_credit_score = i.Date
-                documents.append(Document(
-                            page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value} en el Buro de Credito: {credit_repository}, clasificacion: {get_score_rating(i.Value)}",
-                            metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
-                            id=i.Date,
-                        ))
+                if not i.Value is None:
+                    documents.append(Document(
+                                page_content= f"Puntaje de Credito: Valor en la fecha {date_of_credit_score}:  {i.Value} en el Buro de Credito: {credit_repository}, clasificacion: {get_score_rating(i.Value)}",
+                                metadata={"source": "CreditScore", "field": "factor", "date": date_of_credit_score, "user_id": historic_credit.USER_ID, 'credit_repository': credit_repository },
+                                id=i.Date,
+                            ))
                 if not i.FACTOR is None:
                     for j in i.FACTOR:
                         translated_text = get_translation(j.Text)
