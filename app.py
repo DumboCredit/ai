@@ -488,6 +488,9 @@ class DeleteUserCreditDataRequest(BaseModel):
 async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+    
+    if (get_collection_name(request.user_id) not in [c.name for c in client.list_collections()]):
+        return "ok"
 
     client.delete_collection(name=get_collection_name(request.user_id))
 
