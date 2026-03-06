@@ -28,6 +28,7 @@ from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents
 import json
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import chromadb
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -1240,36 +1241,47 @@ def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
 
     return error_string
 
+BATCH_SIZE_VERIFY_ERRORS = 10
+
+def _verify_errors_batch(errors_batch: list, report: str) -> VerifyErrorsResponse:
+    """Verifica un lote de hasta 10 errores contra el reporte. Uso interno en paralelo."""
+    errors_text = "\n"
+    for i, error in enumerate(errors_batch, 1):
+        errors_text += f"{i}- "
+        errors_text += get_error_string(error)
+        errors_text += "\n"
+    prompt = f"""
+        Eres un sistema de verificacion de errores en el credito, debes devolver de manera ordenada si estan aun presentes o no en el credito los siguientes errores, analizalos uno por uno, ten todo en cuenta, y responde por cada error Verdadero(si esta presente el error en el reporte de credito), Falso(si no aparece en el credito), esto por cada buro de credito (Experian, TransUnion, Equifax), junto con el identificador del Error:
+        
+        Errores:
+        {errors_text}
+        Los informes de los tres burós se encuentran a continuación:
+        {report}
+    """
+    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort=ReasoningEffortEnum.MEDIUM)
+    structured_llm = llm.with_structured_output(VerifyErrorsResponse)
+    return structured_llm.invoke(prompt)
+
 @app.post("/verify-errors")
 def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
     report = get_user_report(request.user_id)
+    errors = request.errors
 
-    errors = "\n"
-    i = 1
+    # Partir en lotes de máximo 10
+    batches = [errors[i : i + BATCH_SIZE_VERIFY_ERRORS] for i in range(0, len(errors), BATCH_SIZE_VERIFY_ERRORS)]
+    all_still_on_report: list[RepoError] = []
 
-    for error in request.errors:
-        errors += f"{i}- "
-        errors += get_error_string(error)
-        errors += "\n"
-        i += 1
+    # Procesar lotes en paralelo (máximo 10 en paralelo por el tamaño del lote)
+    with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+        futures = {executor.submit(_verify_errors_batch, batch, report): batch for batch in batches}
+        for future in as_completed(futures):
+            batch_response = future.result()
+            all_still_on_report.extend(batch_response.still_on_report)
 
-
-    prompt = f"""
-        Eres un sistema de verificacion de errores en el credito, debes devolver de manera ordenada si estan aun presentes o no en el credito los siguientes errores, analizalos uno por uno, ten todo en cuenta, y responde por cada error Verdadero(si esta presente el error en el reporte de credito), Falso(si no aparece en el credito), esto por cada buro de credito (Experian, TransUnion, Equifax), junto con el identificador del Error:
-        
-        Errores:
-        {errors}
-        Los informes de los tres burós se encuentran a continuación:
-        {report}
-    """
-
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort=ReasoningEffortEnum.MEDIUM)
-    structured_llm = llm.with_structured_output(VerifyErrorsResponse)
-    response = structured_llm.invoke(prompt)
-    return response
+    return VerifyErrorsResponse(still_on_report=all_still_on_report)
 
 class CompareErrorsRequest(BaseModel):
     errors_1: list[ErrorDispute]
