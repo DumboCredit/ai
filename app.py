@@ -25,7 +25,7 @@ from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
-from utils.prompts import scan_documents
+from utils.prompts import scan_documents, get_disputes_by_pdf_prompt
 import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -857,13 +857,6 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
 
     tasks = [structured_llm.ainvoke(messages_inquiries), structured_llm.ainvoke(messages_accounts)]
 
-    # for report_account in report_accounts:
-    #     messages_accounts = [
-    #         {"role": "system", "content": prompt_accounts},
-    #         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_account}"}
-    #     ]
-    #     tasks.append(structured_llm.ainvoke(messages_accounts))
-
     responses = await asyncio.gather(*tasks)
 
     errors = []
@@ -872,6 +865,45 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
         errors.extend(response.errors)
 
     return errors
+
+class GetDisputesRequest(BaseModel):
+    API_KEY: str
+    image_url: Union[str, list[str]]
+    reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.NONE, description="El nivel de razonamiento a usar")
+
+@app.post("/get-disputes-by-pdf")
+async def get_disputes_by_pdf(request:GetDisputesRequest) -> list[ErrorDispute]:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    
+    content = []
+
+    if type(request.image_url) == list:
+        for image in request.image_url:
+            content.append({ 
+            'type': 'image_url', 
+            'image_url': { 'url': image, 'detail': 'auto'} 
+        })
+    else: 
+        content.append({ 
+            'type': 'image_url', 
+            'image_url': { 'url': request.image_url, 'detail': 'auto'} 
+        })
+    
+    messages = [
+        {"role": "system", "content": get_disputes_by_pdf_prompt},
+        {"role": "user", "content": content}
+    ]
+    llm = ChatOpenAI(
+        model="gpt-5.2",
+        reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
+        temperature=0,
+    )
+    structured_llm = llm.with_structured_output(ErrorsDispute)
+
+    response = await structured_llm.ainvoke(messages)
+
+    return response.errors
 
 import re
 from datetime import date

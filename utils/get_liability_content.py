@@ -14,7 +14,7 @@ def get_liability_content(libCC:_CREDIT_LIABILITY) -> str:
     isCollection = libCC.IsCollectionIndicator == "Y"
     isCreditCard = libCC.CreditLoanType == "CreditCard" or libCC.CreditLoanType == "ChargeAccount"
     translated_credit_loan_type = get_translation(libCC.CreditLoanType)
-    content = f"{translated_credit_loan_type or "Otro prestamo"}: "
+    content = f"{translated_credit_loan_type or 'Otro prestamo'}: "
     if isChargeOff:
         content += f"Es un charge off (cobranza). "
     if isCollection:
