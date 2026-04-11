@@ -1,5 +1,18 @@
 from typing import Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+import re
+
+
+def normalize_keys(data):
+    """
+    Strips XML-derived prefixes (@_, @, _) from all dict keys recursively.
+    Handles both the clean format (example.json) and the XML-parsed format (eddy.json).
+    """
+    if isinstance(data, dict):
+        return {re.sub(r'^[@_]+', '', k): normalize_keys(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [normalize_keys(item) for item in data]
+    return data
 
 class _RESIDENCE(BaseModel):
     City: Optional[str] = None
@@ -115,3 +128,16 @@ class CreditRequest(BaseModel):
     CREDIT_SUMMARY_EFX: Optional[CREDIT_SUMMARY] = None #Equifax
     CREDIT_SUMMARY_TUI: Optional[CREDIT_SUMMARY] = None #TransUnion
     CREDIT_SUMMARY_XPN: Optional[CREDIT_SUMMARY] = None #Experian
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_input(cls, data):
+        data = normalize_keys(data)
+        # Unwrap CREDIT_RESPONSE wrapper (XML-parsed format like eddy.json)
+        if 'CREDIT_RESPONSE' in data:
+            credit_response = data.pop('CREDIT_RESPONSE')
+            # Only fill keys not already present (USER_ID and API_KEY come from the caller)
+            for k, v in credit_response.items():
+                if k not in data:
+                    data[k] = v
+        return data

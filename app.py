@@ -11,8 +11,8 @@ from uuid import uuid4
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_classic.chains import create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, Union, Literal
@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import chromadb
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
+from functools import lru_cache
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
@@ -43,10 +44,11 @@ def get_collection_name(user_id:str) -> str:
     return f"{user_id}_credit_collection"
 
 # Helper function para obtener vector store (reutiliza conexiones)
+@lru_cache(maxsize=100)
 def get_vector_store(user_id: str) -> Chroma:
     """
     Obtiene o crea una instancia de Chroma para un usuario específico.
-    Reutiliza la conexión cuando es posible.
+    Utiliza lru_cache para evitar la re-instanciación costosa.
     """
     return Chroma(
         collection_name=f"{user_id}_credit_collection",
@@ -205,7 +207,7 @@ async def add_user_credit_data(historic_credit:CreditRequest):
         if not historic_credit.CREDIT_INQUIRY is None:
             for i in historic_credit.CREDIT_INQUIRY:
                 documents.append(Document(
-                    page_content= f"Consulta: {i.Name}; Tipo de Consulta: {i.PurposeType or "Desconocida"}; Buro de Credito: {i.CREDIT_REPOSITORY.SourceType}; Fecha: {i.Date}",
+                    page_content= f"Consulta: {i.Name}; Tipo de Consulta: {i.PurposeType or 'Desconocida'}; Buro de Credito: {i.CREDIT_REPOSITORY.SourceType}; Fecha: {i.Date}",
                     metadata={"source": "CreditInquiry", "credit_repository": i.CREDIT_REPOSITORY.SourceType, "date": i.Date, "user_id": historic_credit.USER_ID},
                     id=i.CreditInquiryID,
                 ))
@@ -304,8 +306,14 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     ))
 
 
-        if get_collection_name(historic_credit.USER_ID) in [c.name for c in client.list_collections()]:
+        # Optimización: Intentar borrar directamente sin listar todas las colecciones
+        try:
             client.delete_collection(name=get_collection_name(historic_credit.USER_ID))
+            # Limpiar el caché de la instancia borrada
+            get_vector_store.cache_clear()
+        except Exception:
+            # Si no existe, no hacemos nada
+            pass
 
 
         uuids = [get_collection_name(historic_credit.USER_ID) + str(uuid4()) for _ in range(len(documents))]
@@ -333,6 +341,28 @@ from langchain_core.runnables import chain
 class QueryResponse(BaseModel):
     answer: str
 
+# Función para resumir el historial y no desbordar la ventana de contexto
+async def get_summarized_history(last_messages: list[Message]) -> tuple[str, list[Message]]:
+    """
+    Si el historial es largo, resume la parte antigua y mantiene los mensajes recientes.
+    Retorna (resumen, mensajes_recientes).
+    """
+    if not last_messages or len(last_messages) <= 6:
+        return "", last_messages or []
+    
+    # Dividir: mensajes antiguos para resumir y mensajes recientes para mantener tal cual
+    to_summarize = last_messages[:-4]
+    recent = last_messages[-4:]
+    
+    llm_summarizer = ChatOpenAI(model="gpt-4o-mini") # Usamos mini para velocidad y costo en el resumen
+    
+    summary_prompt = "Resume los puntos clave de la siguiente conversación sobre crédito de forma concisa:\n\n"
+    for m in to_summarize:
+        summary_prompt += f"Usuario: {m.input}\nAsistente: {m.output}\n"
+    
+    summary_response = await llm_summarizer.ainvoke(summary_prompt)
+    return summary_response.content, recent
+
 # endpoint to retrieve an answer
 @app.post("/query")
 async def query(query_request:QueryRequest) -> QueryResponse:
@@ -342,10 +372,10 @@ async def query(query_request:QueryRequest) -> QueryResponse:
     vector_store = get_vector_store(query_request.user_id)
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
-        search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
+        search_kwargs={"score_threshold": 0.2, "k": 15, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model="gpt-4o")
 
     system_prompt = (
         f"Eres un asistente inteligente dentro de Dumbo Credit."
@@ -372,9 +402,15 @@ async def query(query_request:QueryRequest) -> QueryResponse:
         "Contexto: {context} "
     )
 
+    # Lógica de resumen
+    summary, recent_messages = await get_summarized_history(query_request.last_messages)
+    
+    if summary:
+        system_prompt += f"\nResumen de la conversación previa para contexto esencial: {summary}\n"
+
     memory = [("system", system_prompt)] 
     
-    for m in query_request.last_messages:
+    for m in recent_messages:
         memory.append(("human", m.input))
         memory.append(("ai", m.output))
 
@@ -404,10 +440,10 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
-        search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
+        search_kwargs={"score_threshold": 0.2, "k": 15, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model="gpt-4o")
 
     system_prompt = (
         f"Eres un asistente inteligente dentro de Dumbo Credit."
@@ -429,9 +465,15 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
         "Contexto: {context} "
     )
 
+    # Lógica de resumen
+    summary, recent_messages = await get_summarized_history(query_request.last_messages)
+    
+    if summary:
+        system_prompt += f"\nResumen de la conversación previa para contexto esencial: {summary}\n"
+
     memory = [("system", system_prompt)] 
     
-    for m in query_request.last_messages:
+    for m in recent_messages:
         memory.append(("human", m.input))
         memory.append(("ai", m.output))
 
@@ -447,20 +489,30 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     structured_llm = llm.with_structured_output(PosAiAnswer)
 
     prompts = [
-        SystemMessage("Identifica si es indispensable la intervencion de una persona humana en este contexto."),
+        SystemMessage(f"Identifica si es indispensable la intervencion de una persona humana en este contexto.\nResumen previo: {summary}"),
     ]
 
-    for m in query_request.last_messages:
+    for m in recent_messages:
         prompts.append(HumanMessage(content=m.input))
         prompts.append(AIMessage(content=m.output))
 
     prompts.append(HumanMessage(content=query_request.query))
 
-    pos_response = structured_llm.invoke(prompts)
-    
+    # Lazo de hasta 3 intentos para clasificación humana
+    must_talk_with_a_human = False
+    for i in range(3):
+        try:
+            pos_response = structured_llm.invoke(prompts)
+            must_talk_with_a_human = pos_response.must_talk_with_a_human
+            break
+        except Exception as e:
+            logger.error(f"Error in human intervention classification (attempt {i+1}): {e}")
+            if i == 2:
+                logger.warning("Max attempts reached for human classification. Defaulting to False.")
+
     return {
         'answer': response['answer'],
-        'must_talk_with_a_human': pos_response.must_talk_with_a_human
+        'must_talk_with_a_human': must_talk_with_a_human
     }
 
 
@@ -474,11 +526,16 @@ async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    # if the collection exists, and collection has documents, return ok
-    if (get_collection_name(request.user_id) in [c.name for c in client.list_collections()] and len(client.get_collection(name=get_collection_name(request.user_id)).get(where={"user_id": request.user_id})['documents']) > 0):
-        return "ok"
-    else:
-        raise HTTPException(status_code=404, detail="This user does'nt have credit data")
+    # Optimización: Acceso directo a la colección sin listar todas (O(1) vs O(N))
+    try:
+        collection = client.get_collection(name=get_collection_name(request.user_id))
+        docs = collection.get(where={"user_id": request.user_id}, limit=1)
+        if len(docs['documents']) > 0:
+            return "ok"
+    except (ValueError, Exception):
+        pass
+    
+    raise HTTPException(status_code=404, detail="This user does'nt have credit data")
 
 class DeleteUserCreditDataRequest(BaseModel):
     API_KEY: str
@@ -490,10 +547,11 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
-    if (get_collection_name(request.user_id) not in [c.name for c in client.list_collections()]):
-        return "ok"
-
-    client.delete_collection(name=get_collection_name(request.user_id))
+    try:
+        client.delete_collection(name=get_collection_name(request.user_id))
+        get_vector_store.cache_clear()
+    except Exception:
+        pass
 
     return "ok"
 
@@ -643,15 +701,15 @@ class Address(BaseModel):
 class ErrorDispute(BaseModel):
     reason: str  = Field(description="Rason por la q el usuario quiere disputar");
     error: Union[ErrorTypeEnum, str] = Field(description="El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente, si no poner una descripcion del error");
-    account_number: Optional[str]  = Field(description="El numero de cuenta asociado en caso de ser una cuenta");
-    name_account: Optional[str] = Field(description="El nombre de cuenta o acredor asociado en caso de ser una cuenta");
-    name_inquiry: Optional[str] = Field(description="El nombre del inquiry asociado en caso de ser un inquiry");
-    credit_repo: str | list[str] = Field(description="El o los buros de credito implicados");
-    inquiry_id: Optional[str] = Field(description="El identificador del inquiry en caso de ser un inquiry");
-    inquiry_date: Optional[str] = Field(description="La fecha de solicitud del inquiry en caso de ser un inquiry, en formato yyyy-mm-dd");
-    action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)");
-    creditor: Optional[str] = Field(default=None, description="Acreedor de la cuenta en caso de ser una cuenta")
-    creditor_data: Optional[Address] = Field(default=None, description="La direccion del acreedor y su nombre en caso de ser una cuenta")
+    account_number: Optional[str]  = None
+    name_account: Optional[str] = None
+    name_inquiry: Optional[str] = None
+    credit_repo: str | list[str] = Field(description="El o los buros de credito implicados")
+    inquiry_id: Optional[str] = None
+    inquiry_date: Optional[str] = None
+    action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)")
+    creditor: Optional[str] = None
+    creditor_data: Optional[Address] = None
 
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
@@ -661,6 +719,24 @@ class ReasoningEffortEnum(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+class AccountSummary(BaseModel):
+    name: str = Field(description="Nombre del acreedor o cuenta")
+    account_number: str = Field(description="Número de cuenta (puede estar parcialmente ofuscado)")
+    status: str = Field(description="Estado actual de la cuenta (OK, Cerrada, Colección, etc.)")
+    balance: str = Field(description="Saldo pendiente")
+    opened_at: str = Field(description="Fecha de apertura de la cuenta (YYYY-MM-DD)")
+    last_activity: str = Field(description="Fecha de última actividad (YYYY-MM-DD)")
+    bureaus: list[str] = Field(description="Burós que reportan esta cuenta")
+
+class InquirySummary(BaseModel):
+    name: str = Field(description="Nombre del solicitante (inquiry)")
+    date: str = Field(description="Fecha de la solicitud")
+    bureaus: list[str] = Field(description="Burós que reportan este inquiry")
+
+class ReportSummary(BaseModel):
+    accounts: list[AccountSummary] = Field(description="Resumen de todas las cuentas encontradas")
+    inquiries: list[InquirySummary] = Field(description="Resumen de todos los inquiries encontrados")
 
 class GetDisputesRequest(BaseModel):
     API_KEY: str
@@ -672,7 +748,7 @@ def get_clean_report(report: str):
 
     report = re.sub(pattern_account_id, '', report).strip()
 
-    report = re.sub(r"(Fecha de apertura de la cuenta:\s*\d{4}-\d{2}-\d{2}\.\s*)|(Fecha de ultima actividad:\s*\d{4}-\d{2}-\d{2}\.\s*)", "", report)
+    # Se remueve la línea que borraba fechas, ya que son críticas para el análisis legal.
 
     report = re.sub(r"Mi primer nombre es:\s*(\w+)\nMi segundo nombre es:\s*(\w+)\nMi apellido es:\s*(\w+).*?(\d{4}-\d{2}-\d{2})", 
                 r"Nombre: \1 \2 \3\nNacimiento: \4", report, flags=re.S)
@@ -714,25 +790,79 @@ def get_clean_report(report: str):
 
     return report
 
-def get_user_report(user_id:str, split: bool = False):
-    collection = client.get_collection(name=get_collection_name(user_id))
+@lru_cache(maxsize=100)
+def get_clean_report_cached(report_str: str):
+    """Versión cacheada para evitar procesamiento repetitivo de regex sobre el mismo reporte."""
+    return get_clean_report(report_str)
 
-    results = collection.get(
-        where={
-            "$and": [
-                {"user_id": user_id},
-                {"source": {"$ne": "CreditSummary"}},
-                {"source": {"$ne": "CreditScore"}},
-                {"source": {"$ne": "Personal Info"}},
-                {"field": {"$ne": "SSN"}},
-                {"field": {"$ne": "credit_cards"}},
-                {"field": {"$ne": "auto_loans"}},
-                {"field": {"$ne": "education_loans"}},
-                {"field": {"$ne": "mortgage_loans"}}
-            ]
-        },  # filter by user_id tag/metadata
-        limit=None  # or a very high number if None is not supported
-    )
+import hashlib
+
+# Caché para el resumen del reporte (vía manual para soportar async)
+# Clave: (user_id, report_hash)
+report_summary_cache = {}
+
+async def get_report_summary_tool(user_id: str, report: str) -> ReportSummary:
+    """ Tool especializado para extraer un resumen denso del reporte. 
+        Se invalida automáticamente si el reporte cambia gracias al hashing.
+    """
+    # Procesamiento de limpieza en hilo de fondo para no bloquear el loop
+    clean_report = await asyncio.to_thread(get_clean_report, report)
+    report_hash = hashlib.md5(clean_report.encode()).hexdigest()
+    cache_key = (user_id, report_hash)
+    
+    if cache_key in report_summary_cache:
+        logger.info(f"Usando resumen cacheado para el usuario {user_id} (Dato íntegro)")
+        return report_summary_cache[cache_key]
+        
+    # Si no está en cache o el hash cambió, generamos uno nuevo
+    prompt = f"""
+    Eres un sistema de extracción de datos de alta precisión. Tu tarea es generar un inventario denso y exacto de todas las entidades en este reporte de crédito.
+    
+    INSTRUCCIONES CRÍTICAS:
+    - Extrae cada cuenta/acreedor con su estado (status), balance actual, y los burós que la reportan.
+    - Captura con precisión la 'Fecha de apertura' y la 'Fecha de última actividad' para cada cuenta. Si una no existe, usa 'N/A'.
+    - Extrae cada inquiry (consulta) con su fecha exacta (YYYY-MM-DD) y los burós que la reportan.
+    - Mantén los nombres comerciales exactos.
+    - NO omitas nada. Este resumen es la base para detectar errores legales.
+    
+    REPORTE A PROCESAR:
+    {report}
+    """
+    llm = ChatOpenAI(model="gpt-5.4")
+    structured_llm = llm.with_structured_output(ReportSummary)
+    
+    logger.info(f"Generando NUEVO resumen para el usuario {user_id} (Dato actualizado o nuevo)")
+    summary = await structured_llm.ainvoke(prompt)
+    
+    # Limpiar caché antiguo del usuario para no saturar memoria
+    keys_to_remove = [k for k in report_summary_cache.keys() if k[0] == user_id]
+    for k in keys_to_remove:
+        del report_summary_cache[k]
+        
+    report_summary_cache[cache_key] = summary
+    return summary
+
+async def get_user_report(user_id:str, split: bool = False):
+    def fetch_data():
+        collection = client.get_collection(name=get_collection_name(user_id))
+        return collection.get(
+            where={
+                "$and": [
+                    {"user_id": user_id},
+                    {"source": {"$ne": "CreditSummary"}},
+                    {"source": {"$ne": "CreditScore"}},
+                    {"source": {"$ne": "Personal Info"}},
+                    {"field": {"$ne": "SSN"}},
+                    {"field": {"$ne": "credit_cards"}},
+                    {"field": {"$ne": "auto_loans"}},
+                    {"field": {"$ne": "education_loans"}},
+                    {"field": {"$ne": "mortgage_loans"}}
+                ]
+            },
+            limit=None
+        )
+
+    results = await asyncio.to_thread(fetch_data)
 
     disputes = results['documents']
 
@@ -768,10 +898,10 @@ def get_user_report(user_id:str, split: bool = False):
         
         # report_accounts = [get_clean_report(report_account) for report_account in report_accounts]
 
-        return get_clean_report(report_inquiries), get_clean_report(report_accounts)
+        return get_clean_report_cached(report_inquiries), get_clean_report_cached(report_accounts)
 
     report = "\n".join([dispute for dispute in disputes])
-    report = get_clean_report(report)
+    report = get_clean_report_cached(report)
 
     return report
 
@@ -790,89 +920,68 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    report_inquiries, report_accounts = get_user_report(request.user_id, split=True)
+    # 1. Obtener reporte y generar RESUMEN (Tool de alta atención)
+    report_raw = await get_user_report(request.user_id)
+    summary = await get_report_summary_tool(request.user_id, report_raw)
 
-    logger.error(f"Report inquiries: {report_inquiries}")
-    logger.error(f"Report accounts: {report_accounts}")
+    # Desempaquetar el modelo Pydantic a texto plano semi-estructurado
+    cuentas_str = "\n".join([
+        f"- {acc.name} (Estado: {acc.status}, Apertura: {acc.opened_at}, Saldo: {acc.balance}, Burós: {', '.join(acc.bureaus)})" 
+        for acc in summary.accounts
+    ])
+    inquiries_str = "\n".join([
+        f"- {inq.name} (Fecha: {inq.date}, Burós: {', '.join(inq.bureaus)})" 
+        for inq in summary.inquiries
+    ])
+    
+    summary_text = f"--- CUENTAS ---\n{cuentas_str}\n\n--- INQUIRIES ---\n{inquiries_str}"
 
+    # Optimizamos prompts para trabajar sobre el texto claro estructurado
     prompt_inquiries = f"""
-    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) y detectar posibles errores relacionados únicamente con las inquiries.
-
-    Acciones a realizar:
-    1. Inquiries que no corresponden a cuentas abiertas:
-        - Si una inquiry no corresponde a una cuenta abierta, se debe disputar para corregir esta incongruencia.
-        - Los nombres de las cuentas asociadas a las inquiries no tienen que ser exactamente iguales.
-        - No puedes disputar las inquiries que corresponden a cuentas abiertas, aunque no sean exactamente iguales los nombres de las cuentas asociadas a las inquiries.
-        - No disputes ningun otro error que no sea una inquiry que no corresponda a una cuenta abierta.
-    2. Manejo de Inquiries:
-        - Disputar si NO CORRESPONDEN a una cuenta abierta o si la cuenta asociada está cerrada.
-
-    Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
-    - Rason por la q el usuario quiere disputar(reason)
-    - El error en cuestion(error)
-    - El nombre del inquiry asociado si es un inquiry(name_inquiry)
-    - La fecha de solicitud del inquiry si es un inquiry, en formato yyyy-mm-dd(inquiry_date)
-    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
-    - El identificador del inquiry si es un inquiry(inquiry_id)
-    - La accion a tomar por el usuario(action)
+    Eres un experto en reparación de crédito. Analiza el siguiente RESUMEN de inquiries vs cuentas y detecta posibles errores:
+    - Inquiries que no corresponden a cuentas abiertas o cuentas que ya están cerradas (ej. Si hay un inquiry de 'SOFI' y no hay cuenta de 'SOFI', se debe disputar).
+    - No disputes inquiries de cuentas activas/abiertas legítimas.
+    
+    {summary_text}
     """
 
     prompt_accounts = f"""
-    Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
-    1. Comparación de colecciones en los tres burós:
-        - Compara la información de las colecciones reportadas por los tres burós.
-        - Verifica que los saldos y los estados sean idénticos. Si no es así, genera una disputa.
-    2. Estado de la colección:
-        - Colección abierta incorrectamente: Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
-    3. Colección y cuenta original abiertas simultáneamente:
-        - Si una cuenta original está abierta y tiene una colección asociada abierta, se debe disputar para corregir esta incongruencia. Ambas no deberían estar abiertas al mismo tiempo.
-    4. Manejo de Marcas Negativas:
-        - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
-        - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
-
-    Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
-    - Rason por la q el usuario quiere disputar(reason)
-    - El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente(error)
-    - El numero de cuenta asociado(account_number)
-    - El nombre de cuenta asociado o el acreedor exacto como aparece en el reporte, nunca el tipo de cuenta(name_account)
-    - El o los buros de credito implicados, si el mismo error es en varios buros poner el error solo una vez, y decir los buros en los que esta, si es un error de un solo buro q tiene datos distintos(negativos) de los otros buros poner el error solo una vez y decir el buro en el que esta diferente, en formato de lista(credit_repo)
-    - La accion a tomar por el usuario(action)
-    - Acreedor de la cuenta, el nombre exacto como aparece en el reporte(creditor)
+    Eres un experto en reparación de crédito. Analiza el siguiente RESUMEN de cuentas y detecta errores:
+    - Comparar estados y balances inconsistentes.
+    - Colecciones abiertas erróneamente o sin original de soporte.
+    - Cuenta original y colección abiertas simultáneamente.
+    - Marcas negativas (Late Payments, Charge off, Repossession).
+    
+    {summary_text}
     """
-    messages_inquiries = [
-        {"role": "system", "content": prompt_inquiries},
-        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_inquiries}"}
-    ]
+
     llm = ChatOpenAI(
-        model="gpt-5.2",
+        model="gpt-5.4",
         reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
         temperature=0,
     )
     structured_llm = llm.with_structured_output(ErrorsDispute)
 
-    messages_accounts = [
-        {"role": "system", "content": prompt_accounts},
-        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_accounts}"}
+    tasks = [
+        structured_llm.ainvoke([{"role": "system", "content": prompt_inquiries}]),
+        structured_llm.ainvoke([{"role": "system", "content": prompt_accounts}])
     ]
-
-    tasks = [structured_llm.ainvoke(messages_inquiries), structured_llm.ainvoke(messages_accounts)]
 
     responses = await asyncio.gather(*tasks)
 
     errors = []
-
     for response in responses:
         errors.extend(response.errors)
 
     return errors
 
-class GetDisputesRequest(BaseModel):
+class GetDisputesByPdfRequest(BaseModel):
     API_KEY: str
     image_url: Union[str, list[str]]
     reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.NONE, description="El nivel de razonamiento a usar")
 
 @app.post("/get-disputes-by-pdf")
-async def get_disputes_by_pdf(request:GetDisputesRequest) -> list[ErrorDispute]:
+async def get_disputes_by_pdf(request:GetDisputesByPdfRequest) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
@@ -895,7 +1004,7 @@ async def get_disputes_by_pdf(request:GetDisputesRequest) -> list[ErrorDispute]:
         {"role": "user", "content": content}
     ]
     llm = ChatOpenAI(
-        model="gpt-5.2",
+        model="gpt-5.4",
         reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
         temperature=0,
     )
@@ -967,7 +1076,7 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
     }
 
 async def get_creditor_information(creditor, error):
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="high")
+    llm = ChatOpenAI(model="gpt-5.4")
     prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute: 
     {error}
     Creditor: {creditor}"""
@@ -1086,7 +1195,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="low")
+    llm = ChatOpenAI(model="gpt-5.4")
 
     equifax_errors = [
         {
@@ -1264,7 +1373,7 @@ def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
     if isinstance(error.credit_repo, str):
         error_string += f"Buro de credito: {error.credit_repo}\n"
     else:
-        error_string += f"Buros de credito: {", ".join([repo for repo in error.credit_repo])}\n"
+        error_string += f"Buros de credito: {', '.join([repo for repo in error.credit_repo])}\n"
 
     if isinstance(error.reason, str):
         error_string += f"Rason de la disputa: {error.reason}"
@@ -1275,43 +1384,52 @@ def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
 
 BATCH_SIZE_VERIFY_ERRORS = 10
 
-def _verify_errors_batch(errors_batch: list, report: str) -> VerifyErrorsResponse:
-    """Verifica un lote de hasta 10 errores contra el reporte. Uso interno en paralelo."""
+async def _verify_errors_batch(errors_batch: list, summary: ReportSummary) -> VerifyErrorsResponse:
+    """Verifica un lote de hasta 10 errores contra el resumen del reporte. Uso interno asíncrono."""
     errors_text = "\n"
     for i, error in enumerate(errors_batch, 1):
         errors_text += f"{i}- "
         errors_text += get_error_string(error)
         errors_text += "\n"
+    
     prompt = f"""
-        Eres un sistema de verificacion de errores en el credito, debes devolver de manera ordenada si estan aun presentes o no en el credito los siguientes errores, analizalos uno por uno, ten todo en cuenta, y responde por cada error Verdadero(si esta presente el error en el reporte de credito), Falso(si no aparece en el credito), esto por cada buro de credito (Experian, TransUnion, Equifax), junto con el identificador del Error:
+        Eres un sistema de verificacion de errores en el credito. Tu tarea es determinar si los errores listados abajo están presentes en el resumen del reporte.
+        Responde Verdadero o Falso por cada buró (Experian, TransUnion, Equifax).
         
-        Errores:
+        ERRORES A VERIFICAR:
         {errors_text}
-        Los informes de los tres burós se encuentran a continuación:
-        {report}
+        
+        RESUMEN DEL REPORTE (REFERENCIA):
+        {summary.model_dump_json()}
     """
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort=ReasoningEffortEnum.MEDIUM)
+    # Para la verificación contra resumen, gpt-4o-mini es extremadamente rápido y preciso
+    llm = ChatOpenAI(model="gpt-5-mini")
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
-    return structured_llm.invoke(prompt)
+    return await structured_llm.ainvoke(prompt)
 
 @app.post("/verify-errors")
-def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
+async def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    report = get_user_report(request.user_id)
+    # 1. Obtener reporte limpio (cacheado)
+    report = await get_user_report(request.user_id)
+    
+    # 2. GENERAR RESUMEN (El "Tool" de alta atención)
+    summary = await get_report_summary_tool(request.user_id, report)
+    
     errors = request.errors
 
-    # Partir en lotes de máximo 10
+    # 3. Partir en lotes y procesar en paralelo de forma asíncrona
     batches = [errors[i : i + BATCH_SIZE_VERIFY_ERRORS] for i in range(0, len(errors), BATCH_SIZE_VERIFY_ERRORS)]
+    
+    tasks = [_verify_errors_batch(batch, summary) for batch in batches]
+    
     all_still_on_report: list[RepoError] = []
-
-    # Procesar lotes en paralelo (máximo 10 en paralelo por el tamaño del lote)
-    with ThreadPoolExecutor(max_workers=len(batches)) as executor:
-        futures = {executor.submit(_verify_errors_batch, batch, report): batch for batch in batches}
-        for future in as_completed(futures):
-            batch_response = future.result()
-            all_still_on_report.extend(batch_response.still_on_report)
+    
+    responses = await asyncio.gather(*tasks)
+    for batch_response in responses:
+        all_still_on_report.extend(batch_response.still_on_report)
 
     return VerifyErrorsResponse(still_on_report=all_still_on_report)
 

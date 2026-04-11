@@ -1,8 +1,9 @@
-langchain
+langchain==0.3.28
 langchain-openai
 # langchain-google-genai
 fastapi
 uvicorn
 python-dotenv
 langchain-chroma>=0.1.2
-langchain_classic
+chromadb
+pydantic
