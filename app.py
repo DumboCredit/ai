@@ -628,28 +628,6 @@ async def paraphrase_letter(request: ParaphraseLetterRequest):
 #     except Exception as e:
 #         print(e)
 
-DISPUTE_FILTER_PHRASES = (
-    "aparece con variaciones de nombre/datos",
-    "se reporta con variación de nombre",
-    "se reporta con nombres distintos",
-    "aparece con variaciones de nombre",
-    "aparece con variación de nombre",
-    "se reporta con nombres/acreedor diferentes",
-)
-
-def _normalize_text(value: Optional[Union[str, ErrorTypeEnum]]) -> str:
-    if value is None:
-        return ""
-    return str(value).strip().lower()
-
-def _should_filter_dispute(error: ErrorDispute) -> bool:
-    text_to_scan = " ".join(
-        [
-            _normalize_text(error.reason),
-        ]
-    )
-    return any(phrase in text_to_scan for phrase in DISPUTE_FILTER_PHRASES)
-
 class ErrorTypeEnum(str, Enum):
     COLLECTION = "Collection"
     CHARGE_OFF = "Charge off"
@@ -806,6 +784,28 @@ def normalize_repos_to_set(data):
         return {data} 
     # Si es lista, la convertimos a set
     return set(data)
+
+DISPUTE_FILTER_PHRASES = (
+    "aparece con variaciones de nombre/datos",
+    "se reporta con variación de nombre",
+    "se reporta con nombres distintos",
+    "aparece con variaciones de nombre",
+    "aparece con variación de nombre",
+    "se reporta con nombres/acreedor diferentes",
+)
+
+def _normalize_text(value: Optional[Union[str, ErrorTypeEnum]]) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+def _should_filter_dispute(error: ErrorDispute) -> bool:
+    text_to_scan = " ".join(
+        [
+            _normalize_text(error.reason),
+        ]
+    )
+    return any(phrase in text_to_scan for phrase in DISPUTE_FILTER_PHRASES)
 
 @app.post("/get-disputes")
 async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
