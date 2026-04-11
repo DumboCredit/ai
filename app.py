@@ -628,6 +628,28 @@ async def paraphrase_letter(request: ParaphraseLetterRequest):
 #     except Exception as e:
 #         print(e)
 
+DISPUTE_FILTER_PHRASES = (
+    "aparece con variaciones de nombre/datos",
+    "se reporta con variación de nombre",
+    "se reporta con nombres distintos",
+    "aparece con variaciones de nombre",
+    "aparece con variación de nombre",
+    "se reporta con nombres/acreedor diferentes",
+)
+
+def _normalize_text(value: Optional[Union[str, ErrorTypeEnum]]) -> str:
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+def _should_filter_dispute(error: ErrorDispute) -> bool:
+    text_to_scan = " ".join(
+        [
+            _normalize_text(error.reason),
+        ]
+    )
+    return any(phrase in text_to_scan for phrase in DISPUTE_FILTER_PHRASES)
+
 class ErrorTypeEnum(str, Enum):
     COLLECTION = "Collection"
     CHARGE_OFF = "Charge off"
@@ -821,6 +843,7 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian, y TransUnion) y detectar posibles errores en las colecciones y otros elementos reportados para removerlos del reporte. A continuación, se detallan las acciones que debes realizar para identificar problemas comunes en los reportes de crédito y disputarlos si es necesario:
     1. Comparación de colecciones en los tres burós:
         - Compara la información de las colecciones reportadas por los tres burós.
+        - No compara el nombre de la cuenta ni la direccion, estos pueden ser diferentes, solo el saldo y el estado.
         - Verifica que los saldos y los estados sean idénticos. Si no es así, genera una disputa.
     2. Estado de la colección:
         - Colección abierta incorrectamente: Una colección no debe estar en estado abierto si ya fue saldada o gestionada. Si se encuentra en estado abierto erróneamente, genera una disputa.
@@ -863,6 +886,8 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
 
     for response in responses:
         errors.extend(response.errors)
+
+    errors = [error for error in errors if not _should_filter_dispute(error)]
 
     return errors
 
@@ -1300,7 +1325,9 @@ def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
     report = get_user_report(request.user_id)
-    errors = request.errors
+    errors = [error for error in request.errors if not _should_filter_dispute(error)]
+    if not errors:
+        return VerifyErrorsResponse(still_on_report=[])
 
     # Partir en lotes de máximo 10
     batches = [errors[i : i + BATCH_SIZE_VERIFY_ERRORS] for i in range(0, len(errors), BATCH_SIZE_VERIFY_ERRORS)]
