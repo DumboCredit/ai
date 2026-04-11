@@ -25,7 +25,7 @@ from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
-from utils.prompts import scan_documents, get_disputes_by_pdf_prompt
+from utils.prompts import scan_documents, get_disputes_by_pdf_prompt, extract_credit_data_from_pdf_prompt
 import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -640,6 +640,409 @@ class Address(BaseModel):
     state: str = Field(description="The state of the creditor (two letter code)")
     zip_code: str = Field(description="The zip code of the creditor")
 
+
+class CreditBureauEnum(str, Enum):
+    EQUIFAX = "Equifax"
+    EXPERIAN = "Experian"
+    TRANSUNION = "TransUnion"
+
+
+class AccountStatusEnum(str, Enum):
+    OPEN = "Open"
+    CLOSED = "Closed"
+    CURRENT = "Current"
+    PAID = "Paid"
+    PAYS_AS_AGREED = "Pays as agreed"
+    CHARGE_OFF = "Charge off"
+    COLLECTION = "Collection"
+    DELINQUENT = "Delinquent"
+    LATE = "Late"
+    FORECLOSURE = "Foreclosure"
+    REPOSSESSION = "Repossession"
+    VOLUNTARY_SURRENDER = "Voluntary surrender"
+    SETTLED = "Settled"
+    OTHER = "Other"
+
+
+class PdfPersonalResidence(BaseModel):
+    BorrowerResidencyType: Optional[str] = Field(default=None, description="Current, Prior, etc.")
+    StreetAddress: Optional[str] = None
+    City: Optional[str] = None
+    State: Optional[str] = None
+    PostalCode: Optional[str] = None
+
+
+class PdfPersonalInfoFromImage(BaseModel):
+    bureau: CreditBureauEnum = Field(
+        description="Buró del que proviene este bloque (nombre, SSN, direcciones, etc.)"
+    )
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    ssn: Optional[str] = None
+    birth_date: Optional[str] = None
+    residences: list[PdfPersonalResidence] = Field(default_factory=list)
+
+
+class PdfAccountFromImage(BaseModel):
+    name: Optional[str] = Field(default=None, description="Nombre de la cuenta / tradeline como en el informe")
+    account_number: Optional[str] = None
+    credit_limit: Optional[float] = None
+    balance: Optional[float] = None
+    credit_utilization_percent: Optional[float] = Field(
+        default=None,
+        description="Porcentaje del límite de crédito utilizado (0–100); omitir si no figura o no aplica",
+        ge=0,
+        le=100,
+    )
+    monthly_payment: Optional[float] = None
+    account_status: Optional[AccountStatusEnum] = Field(
+        default=None,
+        description="Estado de la cuenta según el informe; usar Other si no encaja en otro valor",
+    )
+    loan_type: Optional[str] = None
+    opened_date: Optional[str] = None
+    last_activity: Optional[str] = None
+    creditor: Address = Field(description="Acreedor con formato Address")
+    bureau: Union[CreditBureauEnum, list[CreditBureauEnum]] = Field(
+        description="Buró o burós donde figura esta cuenta (Equifax, Experian, TransUnion)"
+    )
+
+
+class PdfInquiryFromImage(BaseModel):
+    name: str
+    date: str
+    purpose_type: Optional[str] = None
+    bureau: CreditBureauEnum = Field(description="Buró donde figura la consulta")
+
+
+class PdfPublicRecordFromImage(BaseModel):
+    record_type: str
+    filed_date: Optional[str] = None
+    description: Optional[str] = None
+    court: Optional[str] = None
+    bureau: Optional[CreditBureauEnum] = None
+
+
+class PdfCreditScoreFromImage(BaseModel):
+    bureau: CreditBureauEnum
+    date: Optional[str] = None
+    value: Optional[int] = None
+
+
+class CreditDataExtractedFromPdf(BaseModel):
+    personal_info: list[PdfPersonalInfoFromImage] = Field(
+        default_factory=list,
+        description="Un bloque por buró cuando el informe separa la información personal por sección",
+    )
+    accounts: list[PdfAccountFromImage] = Field(default_factory=list)
+    inquiries: list[PdfInquiryFromImage] = Field(default_factory=list)
+    public_records: list[PdfPublicRecordFromImage] = Field(default_factory=list)
+    credit_scores: list[PdfCreditScoreFromImage] = Field(default_factory=list)
+
+
+class ReasoningEffortEnum(str, Enum):
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class AddUserCreditDataByPdfRequest(BaseModel):
+    API_KEY: str
+    user_id: Optional[str] = None
+    image_url: Union[str, list[str]]
+    file_id: str
+    reasoning_effort: ReasoningEffortEnum = Field(
+        default=ReasoningEffortEnum.NONE, description="Nivel de razonamiento del modelo"
+    )
+
+
+def _pdf_personal_info_to_documents(user_id: str, infos: list[PdfPersonalInfoFromImage], file_id: str) -> list[Document]:
+    """Mismo formato de texto que /add-user-credit-data para que /generate-letter y el retriever lo encuentren."""
+    documents: list[Document] = []
+    if not infos:
+        return documents
+    block = infos[0]
+    for candidate in infos:
+        if (
+            candidate.first_name
+            or candidate.last_name
+            or candidate.ssn
+            or candidate.birth_date
+            or candidate.residences
+        ):
+            block = candidate
+            break
+
+    if block.first_name:
+        documents.append(
+            Document(
+                page_content=f"Mi primer nombre es: {block.first_name}",
+                metadata={"field": "FirstName", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    if block.middle_name:
+        documents.append(
+            Document(
+                page_content=f"Mi segundo nombre es: {block.middle_name}",
+                metadata={"field": "MiddleName", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    if block.last_name:
+        documents.append(
+            Document(
+                page_content=f"Mi apellido es: {block.last_name}",
+                metadata={"field": "LastName", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    if block.ssn:
+        documents.append(
+            Document(
+                page_content=f"Mi SSN es: {block.ssn}",
+                metadata={"field": "SSN", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    if block.birth_date:
+        documents.append(
+            Document(
+                page_content=f"Mi Fecha de nacimiento es: {block.birth_date}",
+                metadata={"field": "BirthDate", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    if block.residences:
+        parts: list[str] = []
+        for residence in block.residences:
+            address = ""
+            if residence.BorrowerResidencyType is not None:
+                br = residence.BorrowerResidencyType
+                if br == "Current":
+                    address += "Residiendo Actualmente en: "
+                elif br == "Prior":
+                    address += "Anteriormente residiendo en: "
+                else:
+                    address += f"Residencia ({br}) en: "
+            if residence.City is not None:
+                address += f"Ciudad {residence.City}, "
+            if residence.State is not None:
+                address += f"Estado {residence.State}, "
+            if residence.PostalCode is not None:
+                address += f"Codigo Postal {residence.PostalCode}, "
+            if residence.StreetAddress is not None:
+                address += f"Calle {residence.StreetAddress}, "
+            if len(address) >= 2 and address.endswith(", "):
+                address = address[:-2]
+            address += "; "
+            parts.append(address)
+        addresses = "Mis direcciones son: " + "".join(parts)
+        documents.append(
+            Document(
+                page_content=addresses,
+                metadata={"field": "Address", "source": "Personal Info", "user_id": user_id, "file_id": file_id},
+            )
+        )
+    return documents
+
+
+def _pdf_bureau_values(bureau: Union[CreditBureauEnum, list[CreditBureauEnum]]) -> list[str]:
+    if isinstance(bureau, list):
+        return [b.value for b in bureau]
+    return [bureau.value]
+
+
+def _delete_user_credit_documents_keep_general_knowledge(user_id: str, file_id: str) -> None:
+    """Quita los documentos de crédito del usuario sin borrar entradas de conocimiento general."""
+    collection_name = get_collection_name(user_id)
+    if collection_name not in [c.name for c in client.list_collections()]:
+        return
+    coll = client.get_collection(name=collection_name)
+    try:
+        res = coll.get(where={"user_id": user_id, "file_id": file_id}, include=["metadatas"])
+    except Exception as e:
+        logger.warning("No se pudieron listar documentos del usuario para borrar: %s", e)
+        return
+    ids_list = res.get("ids") or []
+    metas = res.get("metadatas") or []
+    to_delete: list[str] = []
+    for idx, doc_id in enumerate(ids_list):
+        meta = metas[idx] if idx < len(metas) else None
+        if meta is None:
+            to_delete.append(doc_id)
+            continue
+        if meta.get("source") == "General Knowledge":
+            continue
+        to_delete.append(doc_id)
+    if to_delete:
+        coll.delete(ids=to_delete)
+
+
+def _pdf_account_to_page_content(acc: PdfAccountFromImage) -> str:
+    """Texto alineado con get_liability_content para cuentas extraídas del PDF."""
+    label = acc.loan_type or "Cuenta"
+    name = acc.name or "sin nombre"
+    content = f"{label}: {name}. "
+    if acc.account_status is not None:
+        content += f"Estado de la cuenta: {acc.account_status.value}. "
+    if acc.balance is not None:
+        content += f"Saldo: {acc.balance}. "
+    if acc.credit_limit is not None:
+        content += f"Limite crediticio: {acc.credit_limit}. "
+    if acc.credit_utilization_percent is not None:
+        content += f"Utilizacion del limite: {acc.credit_utilization_percent}%. "
+    if acc.monthly_payment is not None:
+        content += f"Cantidad de Pago Mensual: {acc.monthly_payment}. "
+    if acc.account_number:
+        content += f"Numero de cuenta: {acc.account_number}. "
+    if acc.opened_date:
+        content += f"Fecha de apertura de la cuenta: {acc.opened_date}. "
+    if acc.last_activity:
+        content += f"Fecha de ultima actividad: {acc.last_activity}. "
+    c = acc.creditor
+    if c.company_name:
+        content += f"Nombre del acreedor: {c.company_name}. "
+    if c.address:
+        content += f"Direccion del acreedor: {c.address}. "
+    if c.city:
+        content += f"Ciudad del acreedor: {c.city}. "
+    if c.state:
+        content += f"Estado del acreedor: {c.state}. "
+    if c.zip_code:
+        content += f"Codigo postal del acreedor: {c.zip_code}. "
+    repos = _pdf_bureau_values(acc.bureau)
+    if len(repos) == 1:
+        content += f"Buro de Credito: {repos[0]}. "
+    else:
+        content += f"En los buros de credito: {', '.join(repos)}. "
+    return content
+
+
+def credit_extracted_from_pdf_to_documents(user_id: str, extracted: CreditDataExtractedFromPdf, file_id: str) -> list[Document]:
+    documents: list[Document] = []
+    documents.extend(_pdf_personal_info_to_documents(user_id, extracted.personal_info, file_id))
+
+    for inq in extracted.inquiries:
+        purpose = inq.purpose_type or "Desconocida"
+        repo = inq.bureau.value
+        documents.append(
+            Document(
+                page_content=(
+                    f"Consulta: {inq.name}; Tipo de Consulta: {purpose}; "
+                    f"Buro de Credito: {repo}; Fecha: {inq.date}"
+                ),
+                metadata={
+                    "source": "CreditInquiry",
+                    "credit_repository": repo,
+                    "date": inq.date,
+                    "user_id": user_id,
+                    "file_id": file_id,
+                },
+            )
+        )
+
+    for score in extracted.credit_scores:
+        if score.value is None:
+            continue
+        date_of = score.date or ""
+        repo = score.bureau.value
+        rating = get_score_rating(score.value)
+        documents.append(
+            Document(
+                page_content=(
+                    f"Puntaje de Credito: Valor en la fecha {date_of}:  {score.value} "
+                    f"en el Buro de Credito: {repo}, clasificacion: {rating}"
+                ),
+                metadata={
+                    "source": "CreditScore",
+                    "field": "factor",
+                    "date": date_of or "unknown",
+                    "user_id": user_id,
+                    "credit_repository": repo,
+                    "file_id": file_id,
+                },
+            )
+        )
+
+    for rec in extracted.public_records:
+        bureau_str = rec.bureau.value if rec.bureau is not None else "Desconocido"
+        parts = [f"Registro publico: {rec.record_type}; Buro de Credito: {bureau_str}."]
+        if rec.filed_date:
+            parts.append(f"Fecha de presentacion: {rec.filed_date}.")
+        if rec.description:
+            parts.append(f"Descripcion: {rec.description}.")
+        if rec.court:
+            parts.append(f"Tribunal: {rec.court}.")
+        documents.append(
+            Document(
+                page_content=" ".join(parts),
+                metadata={
+                    "source": "PublicRecord",
+                    "user_id": user_id,
+                    "credit_repository": bureau_str,
+                    "file_id": file_id,
+                },
+            )
+        )
+
+    for acc in extracted.accounts:
+        page = _pdf_account_to_page_content(acc)
+        repos = _pdf_bureau_values(acc.bureau)
+        primary_repo = repos[0] if repos else "Equifax"
+        date_meta = acc.opened_date or acc.last_activity or ""
+        meta: dict = {
+            "source": "CreditLiability",
+            "field": "liability",
+            "user_id": user_id,
+            "credit_repository": primary_repo,
+            "file_id": file_id,
+        }
+        if date_meta:
+            meta["date"] = date_meta
+        documents.append(Document(page_content=page, metadata=meta))
+
+    return documents
+
+
+def persist_pdf_extract_to_vector_store(user_id: str, extracted: CreditDataExtractedFromPdf, file_id: str) -> None:
+    _delete_user_credit_documents_keep_general_knowledge(user_id, file_id)
+    documents = credit_extracted_from_pdf_to_documents(user_id, extracted, file_id)
+    if not documents:
+        return
+    collection_name = get_collection_name(user_id)
+    uuids = [collection_name + str(uuid4()) for _ in range(len(documents))]
+    vector_store = get_vector_store(user_id)
+    vector_store.add_documents(documents=documents, ids=uuids)
+
+
+@app.post("/add-user-credit-data-by-pdf")
+async def add_user_credit_data_by_pdf(
+    request: AddUserCreditDataByPdfRequest,
+) -> CreditDataExtractedFromPdf:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    content: list[dict] = []
+    if isinstance(request.image_url, list):
+        for image in request.image_url:
+            content.append({"type": "image_url", "image_url": {"url": image, "detail": "high"}})
+    else:
+        content.append({"type": "image_url", "image_url": {"url": request.image_url, "detail": "high"}})
+
+    messages = [
+        {"role": "system", "content": extract_credit_data_from_pdf_prompt},
+        {"role": "user", "content": content},
+    ]
+    llm = ChatOpenAI(
+        model="gpt-5.2",
+        reasoning_effort=request.reasoning_effort.value if request.reasoning_effort else "none",
+        temperature=0,
+    )
+    structured_llm = llm.with_structured_output(CreditDataExtractedFromPdf)
+    extracted = await structured_llm.ainvoke(messages)
+    if request.user_id:
+        persist_pdf_extract_to_vector_store(request.user_id, extracted, request.file_id)
+    return extracted
+
+
 class ErrorDispute(BaseModel):
     reason: str  = Field(description="Rason por la q el usuario quiere disputar");
     error: Union[ErrorTypeEnum, str] = Field(description="El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente, si no poner una descripcion del error");
@@ -655,12 +1058,6 @@ class ErrorDispute(BaseModel):
 
 class ErrorsDispute(BaseModel):
     errors: list[ErrorDispute]
-
-class ReasoningEffortEnum(str, Enum):
-    NONE = "none"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
 
 class GetDisputesRequest(BaseModel):
     API_KEY: str

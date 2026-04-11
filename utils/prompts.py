@@ -56,3 +56,22 @@ get_disputes_by_pdf_prompt = """
     - Acreedor de la cuenta, el nombre exacto como aparece en el reporte en caso de ser una cuenta(creditor)
     - El nombre de cuenta asociado o el acreedor exacto como aparece en el reporte, nunca el tipo de cuenta en caso de ser una cuenta(name_account)
     """
+
+extract_credit_data_from_pdf_prompt = """
+    Eres un extractor experto de informes de crédito de EE.UU. (Equifax, Experian, TransUnion) a partir de imágenes de PDF o páginas escaneadas.
+
+    Debes devolver un JSON que cumpla el esquema indicado. Prioriza exactitud: transcribe lo que ves; no inventes datos que no aparezcan en las imágenes.
+
+    Información personal (campo personal_info) — OBLIGATORIO cuando aparezca en el informe:
+    - Busca primero secciones como "Personal Information", "Consumer Information", "Identifying Information", nombre del consumidor, SSN parcial o completo, fecha de nacimiento, direcciones actuales y anteriores.
+    - Rellena al menos un elemento en personal_info si hay nombre, SSN, fecha de nacimiento o direcciones visibles (aunque sea parcial).
+    - Un bloque por buró si el documento separa las columnas o secciones por Equifax / Experian / TransUnion. Si es un informe unificado 3-en-1, crea un bloque por columna o por sección de cada buró; si no puedes distinguir el buró, asigna el buró más probable según encabezados o logos.
+    - first_name, middle_name, last_name: separa el nombre tal como en el documento.
+    - ssn: formato visible (p. ej. ***-**-1234 o completo si aparece).
+    - birth_date: como figure (p. ej. MM/DD/YYYY).
+    - residences: cada dirección con BorrowerResidencyType "Current" o "Prior" (o el texto equivalente en inglés del informe) y calle, ciudad, estado, código postal si están.
+
+    Cuentas (accounts), consultas (inquiries), registros públicos (public_records) y puntajes (credit_scores): extrae todo lo legible como en el esquema.
+
+    Si una sección no aparece en las imágenes, usa listas vacías; no rellenes con suposiciones.
+    """
