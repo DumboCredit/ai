@@ -57,6 +57,40 @@ get_disputes_by_pdf_prompt = """
     - El nombre de cuenta asociado o el acreedor exacto como aparece en el reporte, nunca el tipo de cuenta en caso de ser una cuenta(name_account)
     """
 
+get_litigation_errors_prompt = """
+    Eres un analista legal especializado en la Fair Credit Reporting Act (FCRA) y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) de un consumidor y detectar UNICAMENTE errores que pueden ser LITIGADOS, es decir, posibles violaciones de la ley que ameritan que un abogado revise el caso. NO son simples disputas de reparación de crédito; son errores graves con potencial legal.
+
+    Detecta exclusivamente los siguientes ocho (8) tipos de error. Si un dato necesario no aparece en el informe, NO inventes ni asumas: solo reporta el error cuando la evidencia este presente en los datos.
+
+    1. Reporte posterior a bancarrota (BK) sin la divulgación correcta de la bancarrota:
+        - Una cuenta incluida o descargada en una bancarrota que se sigue reportando sin la notación adecuada de bancarrota (por ejemplo, sin indicar "Incluida en bancarrota" / "Discharged in bankruptcy") o con saldo/estado que contradice el discharge.
+    2. Doble reporte de la misma cuenta:
+        - La misma deuda reportada simultáneamente por el acreedor original Y por una agencia de cobro (debt collector), o por dos agencias de cobro distintas, al mismo tiempo y de forma activa. Una misma cuenta no debe estar duplicada como deuda viva por dos entidades.
+    3. Archivos mezclados (mixed files):
+        - Información que pertenece a otra persona aparece en el reporte del consumidor (por ejemplo, datos de un familiar con el mismo nombre, John Sr. reportado en el archivo de John Jr.). Señales: nombres, fechas de nacimiento, direcciones o cuentas inconsistentes que no corresponden al consumidor.
+    4. Múltiples SSN reportados con cuentas que no son del consumidor:
+        - Aparece más de un número de Seguro Social, o cuentas asociadas a un SSN que no es el del consumidor.
+    5. Reporte por un comprador de deuda / cobrador secundario (downstream) con información distinta a la del acreedor original:
+        - Un debt buyer / debt collector reporta la MISMA deuda pero con número de cuenta, saldo, fecha de apertura u otros datos DIFERENTES a los del acreedor original. Es común con Midland, Jefferson Capital y Cavalry, que cambian el número de cuenta. Compara cuentas que parezcan la misma deuda y detecta inconsistencias en número de cuenta, saldo y fecha de apertura.
+    6. Reporte posterior a la fecha de obsolescencia:
+        - Información negativa reportada después del plazo legal permitido (regla general FCRA: 7 años para la mayoría de la información negativa desde la fecha de la primera morosidad; 10 años para bancarrotas Capítulo 7). Si la fecha de apertura/última actividad indica que la marca negativa supera el plazo de obsolescencia, repórtalo.
+    7. Reporte de una cuenta posterior a una disputa sin la notación de que está en disputa:
+        - Una cuenta que fue disputada por el consumidor se sigue reportando sin la notación "en disputa" (disputed/account in dispute).
+    8. Reporte de un consumidor como fallecido estando vivo:
+        - El consumidor o alguna de sus cuentas aparece marcado como "deceased" / fallecido cuando el consumidor está vivo.
+
+    Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
+    - El tipo de error litigable, usando exactamente uno de los ocho valores del enum(error_type)
+    - La razón / descripción de por qué es un error litigable, explicando la evidencia concreta del informe(reason)
+    - La evidencia textual o los datos del informe que sustentan el error(evidence)
+    - El nombre de la cuenta o acreedor exacto como aparece en el reporte, si aplica(name_account)
+    - El número de cuenta asociado, si aplica(account_number)
+    - El acreedor de la cuenta, el nombre exacto como aparece en el reporte, si aplica(creditor)
+    - El o los buros de credito implicados; si el mismo error está en varios buros, ponlo una sola vez y lista los buros; en formato de lista(credit_repo)
+
+    Si no encuentras ninguno de estos ocho errores, devuelve un array errors vacío. No reportes errores de otro tipo (late payments comunes, inquiries, etc.); esos no van en este endpoint.
+    """
+
 extract_credit_data_from_pdf_prompt = """
     Eres un extractor experto de informes de crédito de EE.UU. (Equifax, Experian, TransUnion) a partir de imágenes de PDF o páginas escaneadas.
 

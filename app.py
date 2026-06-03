@@ -25,7 +25,7 @@ from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
 from models import CreditRequest
 from utils.get_score_rating import get_score_rating
-from utils.prompts import scan_documents, get_disputes_by_pdf_prompt, extract_credit_data_from_pdf_prompt
+from utils.prompts import scan_documents, get_disputes_by_pdf_prompt, extract_credit_data_from_pdf_prompt, get_litigation_errors_prompt
 import json
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1780,6 +1780,79 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
+
+class LitigationErrorTypeEnum(str, Enum):
+    POST_BK_NO_DISCLOSURE = "Reporte posterior a bancarrota sin divulgacion de bancarrota"
+    DOUBLE_REPORTING = "Doble reporte de la misma cuenta"
+    MIXED_FILE = "Archivo mezclado"
+    MULTIPLE_SSN = "Multiples SSN con cuentas que no son del consumidor"
+    DOWNSTREAM_DEBT_BUYER_MISMATCH = "Comprador de deuda reporta informacion distinta al acreedor original"
+    POST_OBSOLESCENCE = "Reporte posterior a la fecha de obsolescencia"
+    POST_DISPUTE_NO_NOTATION = "Reporte posterior a disputa sin notacion de disputa"
+    DECEASED_WHILE_LIVING = "Consumidor reportado como fallecido estando vivo"
+
+class LitigationError(BaseModel):
+    error_type: LitigationErrorTypeEnum = Field(description="El tipo de error litigable, uno de los ocho valores del enum")
+    reason: str = Field(description="Razon / descripcion de por que es un error litigable")
+    evidence: str = Field(description="La evidencia textual o datos del informe que sustentan el error")
+    name_account: Optional[str] = Field(default=None, description="Nombre de la cuenta o acreedor exacto como aparece en el reporte, si aplica")
+    account_number: Optional[str] = Field(default=None, description="Numero de cuenta asociado, si aplica")
+    creditor: Optional[str] = Field(default=None, description="Acreedor de la cuenta, el nombre exacto como aparece en el reporte, si aplica")
+    credit_repo: Union[str, list[str]] = Field(description="El o los buros de credito implicados")
+
+class LitigationErrors(BaseModel):
+    errors: list[LitigationError]
+
+class GetLitigationErrorsRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+    reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.HIGH, description="El nivel de razonamiento a usar")
+
+def get_user_litigation_report(user_id: str) -> str:
+    """Reporte completo para analisis de litigacion: incluye informacion personal,
+    registros publicos y cuentas (con fechas y SSN intactos), excluyendo solo los
+    resumenes/puntajes y los agregados que no aportan a la deteccion legal."""
+    collection = client.get_collection(name=get_collection_name(user_id))
+
+    results = collection.get(
+        where={
+            "$and": [
+                {"user_id": user_id},
+                {"source": {"$ne": "CreditSummary"}},
+                {"source": {"$ne": "CreditScore"}},
+                {"source": {"$ne": "General Knowledge"}},
+                {"field": {"$ne": "credit_cards"}},
+                {"field": {"$ne": "auto_loans"}},
+                {"field": {"$ne": "education_loans"}},
+                {"field": {"$ne": "mortgage_loans"}},
+            ]
+        },
+        limit=None,
+    )
+
+    return "\n".join(results['documents'])
+
+@app.post("/get-litigation-errors")
+async def get_litigation_errors(request: GetLitigationErrorsRequest) -> list[LitigationError]:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    report = get_user_litigation_report(request.user_id)
+
+    messages = [
+        {"role": "system", "content": get_litigation_errors_prompt},
+        {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report}"}
+    ]
+    llm = ChatOpenAI(
+        model="gpt-5.2",
+        reasoning_effort=request.reasoning_effort if request.reasoning_effort else ReasoningEffortEnum.HIGH,
+        temperature=0,
+    )
+    structured_llm = llm.with_structured_output(LitigationErrors)
+
+    response = await structured_llm.ainvoke(messages)
+
+    return response.errors
 
 
 # insert_general_knowledge()
