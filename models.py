@@ -141,3 +141,45 @@ class CreditRequest(BaseModel):
                 if k not in data:
                     data[k] = v
         return data
+
+
+# ── Lessons ──────────────────────────────────────────────────────────────────
+
+class Lesson(BaseModel):
+    lesson_id: str
+    title: str
+    description: str
+    level_hint: int  # 1-5, which level this lesson typically targets
+
+class AddLessonRequest(BaseModel):
+    API_KEY: str
+    lesson: Lesson
+
+
+# ── Credit Plan ───────────────────────────────────────────────────────────────
+
+class WeekTask(BaseModel):
+    week: int                        # 1–4
+    title: str
+    task_type: str                   # "action" | "dispute" | "lesson"
+    lesson_id: Optional[str] = None  # only when task_type == "lesson"
+
+class MonthPlan(BaseModel):
+    month: int
+    title: str
+    description: str
+    estimated_score_gain: int        # realistic points gained this month
+    tasks: list[WeekTask]
+
+class LevelPlan(BaseModel):
+    level: int                       # 1–5
+    name: str                        # fixed level name
+    status: str                      # "completed" | "in_progress" | "locked"
+    months: list[MonthPlan]
+
+class CreditPlan(BaseModel):
+    levels: list[LevelPlan]
+
+class GeneratePlanRequest(BaseModel):
+    API_KEY: str
+    user_id: str
