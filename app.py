@@ -27,6 +27,7 @@ from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, Generate
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents, get_disputes_by_pdf_prompt
 import json
+import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import chromadb
@@ -1591,7 +1592,8 @@ LECCIONES DISPONIBLES:
 
 # ── Score Simulator ───────────────────────────────────────────────────────────
 
-async def get_user_scores(user_id: str) -> list[dict]:
+async def get_user_scores(user_id: str) -> dict:
+    """Retorna {bureau: score_int} parseando los documentos de CreditScore en Chroma."""
     def fetch():
         collection = client.get_collection(name=get_collection_name(user_id))
         return collection.get(
@@ -1599,11 +1601,14 @@ async def get_user_scores(user_id: str) -> list[dict]:
             limit=None
         )
     results = await asyncio.to_thread(fetch)
-    return [
-        {"content": doc, "metadata": meta}
-        for doc, meta in zip(results["documents"], results["metadatas"])
-        if meta.get("field") not in ("factor", "positive_factor")
-    ]
+    scores = {}
+    for doc, meta in zip(results["documents"], results["metadatas"]):
+        # Solo los documentos de valor tienen "Valor en la fecha"
+        match = re.search(r"Valor en la fecha[^:]+:\s+(\d+)", doc)
+        if match:
+            bureau = meta.get("credit_repository", "")
+            scores[bureau] = int(match.group(1))
+    return scores
 
 
 @app.post("/simulate-score")
@@ -1611,15 +1616,15 @@ async def simulate_score(request: SimulateScoreRequest) -> SimulateScoreResponse
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    report_raw, score_docs = await asyncio.gather(
+    report_raw, scores = await asyncio.gather(
         get_user_report(request.user_id),
         get_user_scores(request.user_id),
     )
     summary = await get_report_summary_tool(request.user_id, report_raw)
 
     scores_text = "\n".join([
-        f"- {doc['metadata'].get('credit_repository', 'N/A')}: {doc['content']}"
-        for doc in score_docs
+        f"- {bureau}: {value} pts"
+        for bureau, value in scores.items()
     ]) or "Puntajes no disponibles."
 
     cuentas_str = "\n".join([
@@ -1664,6 +1669,14 @@ INSTRUCCIONES:
     llm = ChatOpenAI(model="gpt-5.4", temperature=0)
     structured_llm = llm.with_structured_output(SimulateScoreResponse)
     result = await structured_llm.ainvoke(prompt)
+
+    # Garantizar que current_score y estimated_new_score sean exactos
+    for imp in result.impacts:
+        real_score = scores.get(imp.bureau)
+        if real_score is not None:
+            imp.current_score = real_score
+            imp.estimated_new_score = real_score + imp.impact
+
     return result
 
 
