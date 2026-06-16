@@ -4,7 +4,7 @@ load_dotenv(".env")
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 
 # imports
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException
 import logging
 from fastapi.responses import JSONResponse
 from uuid import uuid4
@@ -23,7 +23,7 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
-from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest
+from models import CreditRequest
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents, get_disputes_by_pdf_prompt
 import json
@@ -42,9 +42,6 @@ client = chromadb.PersistentClient(path=credit_db_dir)
 
 def get_collection_name(user_id:str) -> str:
     return f"{user_id}_credit_collection"
-
-def get_lessons_collection():
-    return client.get_or_create_collection(name="lessons_collection")
 
 # Helper function para obtener vector store (reutiliza conexiones)
 @lru_cache(maxsize=100)
@@ -707,7 +704,7 @@ class ErrorDispute(BaseModel):
     account_number: Optional[str]  = None
     name_account: Optional[str] = None
     name_inquiry: Optional[str] = None
-    credit_repo: Union[str, List[str]] = Field(description="El o los buros de credito implicados")
+    credit_repo: str | list[str] = Field(description="El o los buros de credito implicados")
     inquiry_id: Optional[str] = None
     inquiry_date: Optional[str] = None
     action: str = Field(description="La accion a tomar por el usuario(siempre va a ser para remover del reporte)")
@@ -1360,7 +1357,7 @@ class RepoError(BaseModel):
 class VerifyErrorsResponse(BaseModel):
     still_on_report: list[RepoError] = Field(description="Si esta o no el error, separado por reporte");
 
-def get_error_string(error: Union[Optional[ErrorDisputeWithId], ErrorDispute]) -> str:
+def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
     error_string = ""
     if isinstance(error, ErrorDisputeWithId) and isinstance(error.id, str):
         error_string += f"Identificador del error: {error.id}\n"
@@ -1477,116 +1474,6 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     response = structured_llm.invoke(prompt)
     return response
-
-
-# ── Lessons ───────────────────────────────────────────────────────────────────
-
-@app.post("/add-lesson")
-async def add_lesson(request: AddLessonRequest):
-    if os.getenv("API_KEY") != request.API_KEY:
-        raise HTTPException(status_code=400, detail="Api key dont match")
-
-    lesson = request.lesson
-    def upsert():
-        # Dummy embedding — lessons are retrieved with get(), not vector search
-        get_lessons_collection().upsert(
-            ids=[lesson.lesson_id],
-            embeddings=[[0.0]],
-            metadatas=[{
-                "lesson_id": lesson.lesson_id,
-                "title": lesson.title,
-                "description": lesson.description,
-                "level_hint": lesson.level_hint,
-            }],
-        )
-    await asyncio.to_thread(upsert)
-    return {"ok": True}
-
-
-@app.get("/get-lessons")
-async def get_lessons(api_key: str = Query(alias="api_key")):
-    if os.getenv("API_KEY") != api_key:
-        raise HTTPException(status_code=400, detail="Api key dont match")
-
-    def fetch():
-        return get_lessons_collection().get()
-    results = await asyncio.to_thread(fetch)
-
-    lessons = []
-    for meta in results.get("metadatas", []):
-        if meta:
-            lessons.append(Lesson(
-                lesson_id=meta["lesson_id"],
-                title=meta["title"],
-                description=meta["description"],
-                level_hint=meta["level_hint"],
-            ))
-    return lessons
-
-
-# ── Credit Plan ───────────────────────────────────────────────────────────────
-
-@app.post("/generate-plan")
-async def generate_plan(request: GeneratePlanRequest) -> CreditPlan:
-    if os.getenv("API_KEY") != request.API_KEY:
-        raise HTTPException(status_code=400, detail="Api key dont match")
-
-    report_raw = await get_user_report(request.user_id)
-    summary = await get_report_summary_tool(request.user_id, report_raw)
-
-    cuentas_str = "\n".join([
-        f"- {acc.name} (Estado: {acc.status}, Apertura: {acc.opened_at}, Saldo: {acc.balance}, Burós: {', '.join(acc.bureaus)})"
-        for acc in summary.accounts
-    ])
-    inquiries_str = "\n".join([
-        f"- {inq.name} (Fecha: {inq.date}, Burós: {', '.join(inq.bureaus)})"
-        for inq in summary.inquiries
-    ])
-    report_summary_text = f"CUENTAS:\n{cuentas_str}\n\nINQUIRIES:\n{inquiries_str}"
-
-    def fetch_lessons():
-        return get_lessons_collection().get()
-    lesson_results = await asyncio.to_thread(fetch_lessons)
-
-    lessons_text = "\n".join([
-        f"- ID: {m['lesson_id']} | Nivel sugerido: {m['level_hint']} | Título: {m['title']} | Descripción: {m['description']}"
-        for m in lesson_results.get("metadatas", []) if m
-    ]) or "No hay lecciones disponibles."
-
-    prompt = f"""
-Eres un experto en reparación de crédito en Estados Unidos. Basándote en el reporte de crédito del usuario,
-genera un plan personalizado de 5 niveles con tareas semanales concretas y accionables.
-
-NIVELES (usa exactamente estos nombres en el campo `name`):
-1. Conoce tu crédito
-2. Construyendo tu base
-3. Optimizando
-4. Ampliando
-5. Crédito Pro
-
-REGLAS ESTRICTAS:
-- Cada nivel contiene 1 o 2 meses (MonthPlan). Cada mes tiene exactamente 4 tareas (una por semana, weeks 1 a 4).
-- task_type debe ser exactamente uno de: "action", "dispute", "lesson".
-  - "action": pago de deuda, apertura de cuenta asegurada, reducción de utilización, solicitar aumento de límite, etc.
-  - "dispute": disputar un error específico del reporte (inquiry, colección, charge-off, etc.).
-  - "lesson": completar una lección del curso. Usa el lesson_id exacto de la lista de lecciones.
-- Si no hay lecciones disponibles o no aplica ninguna, no generes tareas de tipo "lesson".
-- estimated_score_gain: puntos de crédito estimados que el usuario ganará ESE mes (entero positivo, realista según su perfil).
-- Priorización dentro de cada mes: primero reducción de utilización, luego disputas, luego nuevos hábitos o lecciones.
-- status: nivel 1 → "in_progress", niveles 2-5 → "locked".
-- Los títulos de las tareas deben ser específicos al usuario (menciona acreedores reales, montos reales del reporte).
-
-REPORTE DEL USUARIO:
-{report_summary_text}
-
-LECCIONES DISPONIBLES:
-{lessons_text}
-"""
-
-    llm = ChatOpenAI(model="gpt-5.4", temperature=0)
-    structured_llm = llm.with_structured_output(CreditPlan)
-    plan = await structured_llm.ainvoke(prompt)
-    return plan
 
 
 # insert_general_knowledge()
