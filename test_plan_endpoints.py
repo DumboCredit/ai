@@ -224,20 +224,108 @@ def test_generate_plan_unknown_user():
     return check(handled, "server handles unknown user gracefully", f"status={resp.status_code}")
 
 
+# ── 4. Simulate score ──────────────────────────────────────────────────────────
+
+def test_simulate_score_wrong_key():
+    section("4a. POST /simulate-score  (wrong API key → 400)")
+    resp = requests.post(
+        f"{BASE_URL}/simulate-score",
+        json={"API_KEY": "bad", "user_id": USER_ID, "action": "pagar $200"},
+        timeout=10,
+    )
+    return check(resp.status_code == 400, "rejects bad API key", f"status={resp.status_code}")
+
+
+def test_simulate_score_negative_action():
+    section("4b. POST /simulate-score  (acción negativa — vencer cuenta 2 meses)")
+    payload = {
+        "API_KEY": API_KEY,
+        "user_id": USER_ID,
+        "action": "dejar que mi cuenta de Capital One se venza 2 meses sin pagar",
+    }
+    t0 = time.time()
+    resp = requests.post(f"{BASE_URL}/simulate-score", json=payload, timeout=120)
+    elapsed = time.time() - t0
+
+    ok_status = check(resp.status_code == 200, f"returns 200  ({elapsed:.1f}s)", f"status={resp.status_code}")
+    if not ok_status:
+        print(f"  Response: {resp.text[:200]}")
+        return False
+
+    data = resp.json()
+    ok_fields = check(
+        all(k in data for k in ("action", "impacts", "explanation", "risk_level")),
+        "response has all required fields"
+    )
+    if not ok_fields:
+        return False
+
+    ok_impacts = check(len(data["impacts"]) > 0, "at least 1 bureau impact returned", f"got {len(data['impacts'])}")
+
+    schema_ok = True
+    negative_ok = False
+    for imp in data["impacts"]:
+        if not all(k in imp for k in ("bureau", "current_score", "estimated_new_score", "impact")):
+            schema_ok = False
+        if imp.get("impact", 0) < 0:
+            negative_ok = True
+    check(schema_ok, "all impacts have correct schema fields")
+    check(negative_ok, "at least one bureau shows negative impact (score loss)")
+
+    valid_risk = {"low", "medium", "high", "critical"}
+    ok_risk = check(data["risk_level"] in valid_risk, f"risk_level is valid", f"'{data['risk_level']}'")
+    ok_explanation = check(len(data.get("explanation", "")) > 20, "explanation is non-empty")
+
+    print(f"  ℹ  risk_level: {data['risk_level']}")
+    for imp in data["impacts"]:
+        print(f"  ℹ  {imp['bureau']}: {imp['current_score']} → {imp['estimated_new_score']} ({imp['impact']:+d} pts)")
+
+    return ok_status and ok_impacts and schema_ok and ok_risk and ok_explanation
+
+
+def test_simulate_score_positive_action():
+    section("4c. POST /simulate-score  (acción positiva — pagar deuda)")
+    payload = {
+        "API_KEY": API_KEY,
+        "user_id": USER_ID,
+        "action": "pagar el 50% del saldo de mi tarjeta de crédito con mayor balance",
+    }
+    t0 = time.time()
+    resp = requests.post(f"{BASE_URL}/simulate-score", json=payload, timeout=120)
+    elapsed = time.time() - t0
+
+    ok_status = check(resp.status_code == 200, f"returns 200  ({elapsed:.1f}s)", f"status={resp.status_code}")
+    if not ok_status:
+        return False
+
+    data = resp.json()
+    positive_ok = any(imp.get("impact", 0) > 0 for imp in data.get("impacts", []))
+    check(positive_ok, "at least one bureau shows positive impact (score gain)")
+
+    print(f"  ℹ  risk_level: {data['risk_level']}")
+    for imp in data.get("impacts", []):
+        print(f"  ℹ  {imp['bureau']}: {imp['current_score']} → {imp['estimated_new_score']} ({imp['impact']:+d} pts)")
+
+    return ok_status
+
+
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("\n" + "=" * 55)
-    print("  DumboAI — Plan Endpoints Test Suite")
+    print("  DumboAI — Plan & Score Endpoints Test Suite")
     print("=" * 55)
 
     results = []
-    results.append(("add_lessons",           test_add_lessons()))
-    results.append(("add_lesson_wrong_key",   test_add_lesson_wrong_key()))
-    results.append(("get_lessons",            test_get_lessons()))
-    results.append(("generate_plan_wrong_key",test_generate_plan_wrong_key()))
-    results.append(("generate_plan_unknown",  test_generate_plan_unknown_user()))
-    results.append(("generate_plan",          test_generate_plan()))   # last — slowest
+    results.append(("add_lessons",              test_add_lessons()))
+    results.append(("add_lesson_wrong_key",      test_add_lesson_wrong_key()))
+    results.append(("get_lessons",               test_get_lessons()))
+    results.append(("generate_plan_wrong_key",   test_generate_plan_wrong_key()))
+    results.append(("generate_plan_unknown",     test_generate_plan_unknown_user()))
+    results.append(("generate_plan",             test_generate_plan()))
+    results.append(("simulate_score_wrong_key",  test_simulate_score_wrong_key()))
+    results.append(("simulate_score_negative",   test_simulate_score_negative_action()))
+    results.append(("simulate_score_positive",   test_simulate_score_positive_action()))
 
     section("SUMMARY")
     passed = sum(1 for _, ok in results if ok)

@@ -23,7 +23,7 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
-from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest
+from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest, SimulateScoreRequest, SimulateScoreResponse
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents, get_disputes_by_pdf_prompt
 import json
@@ -1587,6 +1587,84 @@ LECCIONES DISPONIBLES:
     structured_llm = llm.with_structured_output(CreditPlan)
     plan = await structured_llm.ainvoke(prompt)
     return plan
+
+
+# ── Score Simulator ───────────────────────────────────────────────────────────
+
+async def get_user_scores(user_id: str) -> list[dict]:
+    def fetch():
+        collection = client.get_collection(name=get_collection_name(user_id))
+        return collection.get(
+            where={"$and": [{"user_id": user_id}, {"source": "CreditScore"}]},
+            limit=None
+        )
+    results = await asyncio.to_thread(fetch)
+    return [
+        {"content": doc, "metadata": meta}
+        for doc, meta in zip(results["documents"], results["metadatas"])
+        if meta.get("field") not in ("factor", "positive_factor")
+    ]
+
+
+@app.post("/simulate-score")
+async def simulate_score(request: SimulateScoreRequest) -> SimulateScoreResponse:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    report_raw, score_docs = await asyncio.gather(
+        get_user_report(request.user_id),
+        get_user_scores(request.user_id),
+    )
+    summary = await get_report_summary_tool(request.user_id, report_raw)
+
+    scores_text = "\n".join([
+        f"- {doc['metadata'].get('credit_repository', 'N/A')}: {doc['content']}"
+        for doc in score_docs
+    ]) or "Puntajes no disponibles."
+
+    cuentas_str = "\n".join([
+        f"- {acc.name} (Estado: {acc.status}, Apertura: {acc.opened_at}, Saldo: {acc.balance}, Burós: {', '.join(acc.bureaus)})"
+        for acc in summary.accounts
+    ])
+    inquiries_str = "\n".join([
+        f"- {inq.name} (Fecha: {inq.date}, Burós: {', '.join(inq.bureaus)})"
+        for inq in summary.inquiries
+    ])
+    report_summary_text = f"CUENTAS:\n{cuentas_str}\n\nINQUIRIES:\n{inquiries_str}"
+
+    prompt = f"""
+Eres un experto en modelos de crédito FICO en Estados Unidos.
+El usuario quiere simular el impacto de la siguiente acción sobre su puntaje:
+
+ACCIÓN: {request.action}
+
+PUNTAJES ACTUALES (por buró):
+{scores_text}
+
+RESUMEN DEL REPORTE:
+{report_summary_text}
+
+INSTRUCCIONES:
+- Devuelve el impacto estimado en puntos para cada buró (TransUnion, Equifax, Experian) por separado.
+- Si un buró no aparece en el reporte, omítelo de impacts.
+- Basa el cálculo en los factores FICO reales:
+    * Historial de pagos (35%): pagos atrasados, delinquencies, charge-offs
+    * Utilización (30%): ratio balance/límite en cuentas revolving
+    * Antigüedad del crédito (15%): edad promedio de cuentas
+    * Mix de crédito (10%): variedad de tipos de cuenta
+    * Nuevas consultas (10%): hard inquiries recientes
+- Ten en cuenta el perfil ACTUAL del usuario: si ya tiene morosidades, el impacto de una nueva
+  es menor que en un perfil limpio. Si ya tiene utilización alta, reducirla tiene más impacto.
+- impact: negativo si la acción daña el puntaje, positivo si lo mejora.
+- risk_level según el peor impacto individual: "low" (<10 pts), "medium" (10-30 pts),
+  "high" (30-60 pts), "critical" (>60 pts).
+- explanation: 2-3 oraciones concretas explicando por qué, mencionando cuentas reales del reporte.
+"""
+
+    llm = ChatOpenAI(model="gpt-5.4", temperature=0)
+    structured_llm = llm.with_structured_output(SimulateScoreResponse)
+    result = await structured_llm.ainvoke(prompt)
+    return result
 
 
 # insert_general_knowledge()

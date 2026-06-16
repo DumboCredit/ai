@@ -183,3 +183,23 @@ class CreditPlan(BaseModel):
 class GeneratePlanRequest(BaseModel):
     API_KEY: str
     user_id: str
+
+
+# ── Score Simulator ───────────────────────────────────────────────────────────
+
+class SimulateScoreRequest(BaseModel):
+    API_KEY: str
+    user_id: str
+    action: str  # lenguaje natural: "dejar que mi cuenta de Capital One se venza 2 meses"
+
+class BureauScoreImpact(BaseModel):
+    bureau: str              # "TransUnion" | "Equifax" | "Experian"
+    current_score: int
+    estimated_new_score: int
+    impact: int              # negativo = pérdida, positivo = ganancia
+
+class SimulateScoreResponse(BaseModel):
+    action: str
+    impacts: list[BureauScoreImpact]
+    explanation: str         # 2-3 oraciones explicando el impacto
+    risk_level: str          # "low" | "medium" | "high" | "critical"
