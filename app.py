@@ -77,6 +77,7 @@ _litigation_cache: dict = {}    # (user_id, hash) -> list[LitigationError]
 _verify_cache: dict = {}        # (user_id, hash) -> VerifyErrorsResponse
 _plan_cache: dict = {}          # (user_id, hash) -> (CreditPlan, expiry_ts)
 _letters_cache: dict = {}       # (user_id, hash) -> respuesta de generate-letter (idempotencia)
+_user_report_hash: dict = {}    # user_id -> hash del contenido ya embebido (idempotencia de add-user-credit-data)
 
 
 # %% Tracking de consumo de tokens %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -410,6 +411,13 @@ async def add_user_credit_data(historic_credit:CreditRequest, response: Response
                     ))
 
 
+        # Idempotencia: si el contenido del reporte es idéntico al ya indexado, NO
+        # re-embebemos (el flujo de refresco hace polling y reenvía los mismos datos
+        # varias veces; re-embeber cuesta decenas de miles de tokens cada vez).
+        content_hash = _input_hash(str(len(documents)), "\x00".join(d.page_content for d in documents))
+        if documents and _user_report_hash.get(historic_credit.USER_ID) == content_hash:
+            return "ok"
+
         # Optimización: Intentar borrar directamente sin listar todas las colecciones
         try:
             client.delete_collection(name=get_collection_name(historic_credit.USER_ID))
@@ -424,6 +432,8 @@ async def add_user_credit_data(historic_credit:CreditRequest, response: Response
         vector_store = get_vector_store(historic_credit.USER_ID)
         _track_embedding_usage(tracker, [d.page_content for d in documents])
         vector_store.add_documents(documents=documents, ids=uuids)
+        if documents:
+            _user_report_hash[historic_credit.USER_ID] = content_hash
 
         # Solo emitimos headers (y por tanto registramos consumo) si de verdad se
         # embebió algo. Sin datos -> 0 tokens, pero NO es un cache hit, así que no
@@ -622,6 +632,7 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     try:
         client.delete_collection(name=get_collection_name(request.user_id))
         get_vector_store.cache_clear()
+        _user_report_hash.pop(request.user_id, None)
     except Exception:
         pass
 
@@ -1276,7 +1287,10 @@ def get_user_report(user_id:str, split: bool = False):
         limit=None  # or a very high number if None is not supported
     )
 
-    disputes = results['documents']
+    # Orden determinista: Chroma no garantiza el orden de .get(), y al re-indexar
+    # (uuids nuevos) ese orden cambia, lo que rompía el hash del reporte y por tanto
+    # el caché de get-disputes/verify-errors. Ordenar deja el reporte estable.
+    disputes = sorted(results['documents'])
 
     if split:
         report_inquiries = "\n".join([dispute for dispute in disputes if 'Consulta' in dispute])
@@ -2024,7 +2038,9 @@ def get_user_litigation_report(user_id: str) -> str:
         limit=None,
     )
 
-    return "\n".join(results['documents'])
+    # Orden determinista para que el hash del reporte (y el caché) sea estable
+    # aunque se re-indexe y cambien los uuids/orden de Chroma.
+    return "\n".join(sorted(results['documents']))
 
 @app.post("/get-litigation-errors")
 async def get_litigation_errors(request: GetLitigationErrorsRequest, response: Response) -> list[LitigationError]:
