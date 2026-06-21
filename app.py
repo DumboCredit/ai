@@ -4,8 +4,10 @@ load_dotenv(".env")
 os.environ['OPENAI_API_KEY'] = os.getenv("OPENAI_API_KEY")
 
 # imports
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query, Response
 import logging
+import threading
+from langchain_core.callbacks import BaseCallbackHandler
 from fastapi.responses import JSONResponse
 from uuid import uuid4
 from langchain_core.documents import Document
@@ -23,7 +25,7 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
-from models import CreditRequest
+from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest
 from utils.get_score_rating import get_score_rating
 from utils.prompts import scan_documents, get_disputes_by_pdf_prompt, extract_credit_data_from_pdf_prompt, get_litigation_errors_prompt
 import json
@@ -32,6 +34,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import chromadb
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
+from functools import lru_cache
+import hashlib
+import time
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
@@ -42,11 +47,85 @@ client = chromadb.PersistentClient(path=credit_db_dir)
 def get_collection_name(user_id:str) -> str:
     return f"{user_id}_credit_collection"
 
+def get_lessons_collection():
+    return client.get_or_create_collection(name="lessons_collection")
+
+
+# %% Caché por reporte de crédito %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Los endpoints de análisis (get-disputes, get-litigation-errors, verify-errors,
+# generate-plan) son deterministas respecto al reporte de crédito: mismo reporte
+# (y mismos parámetros) -> mismo resultado. Cacheamos por hash del input exacto
+# que recibe el LLM para evitar repetir esas llamadas costosas. La clave incluye
+# el contenido del reporte, así que cualquier cambio de datos invalida el caché.
+
+def _input_hash(*parts: str) -> str:
+    h = hashlib.md5()
+    for p in parts:
+        h.update(str(p).encode("utf-8"))
+    return h.hexdigest()
+
+def _cache_put(cache: dict, user_id: str, key: str, value):
+    # Al cambiar el reporte la clave cambia; eliminamos entradas viejas del mismo
+    # usuario para no acumular memoria indefinidamente.
+    for k in [k for k in cache if k[0] == user_id]:
+        del cache[k]
+    cache[(user_id, key)] = value
+
+_disputes_cache: dict = {}      # (user_id, hash) -> list[ErrorDispute]
+_litigation_cache: dict = {}    # (user_id, hash) -> list[LitigationError]
+_verify_cache: dict = {}        # (user_id, hash) -> VerifyErrorsResponse
+_plan_cache: dict = {}          # (user_id, hash) -> (CreditPlan, expiry_ts)
+
+
+# %% Tracking de consumo de tokens %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Callback que acumula el uso de tokens de TODAS las llamadas al LLM dentro de un
+# request (incluso las que usan with_structured_output, que normalmente descartan
+# esa info). Es seguro entre hilos (verify-errors corre lotes en paralelo) y entre
+# tareas async (get-disputes lanza varias ainvoke concurrentes).
+
+class TokenUsageTracker(BaseCallbackHandler):
+    def __init__(self):
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.total_tokens = 0
+        self.by_model: dict = {}
+        self._lock = threading.Lock()
+
+    def on_llm_end(self, response, **kwargs):
+        try:
+            for generations in response.generations:
+                for gen in generations:
+                    message = getattr(gen, "message", None)
+                    usage = getattr(message, "usage_metadata", None) if message is not None else None
+                    if not usage:
+                        continue
+                    inp = usage.get("input_tokens", 0) or 0
+                    out = usage.get("output_tokens", 0) or 0
+                    tot = usage.get("total_tokens", 0) or (inp + out)
+                    model = (getattr(message, "response_metadata", {}) or {}).get("model_name", "unknown")
+                    with self._lock:
+                        self.input_tokens += inp
+                        self.output_tokens += out
+                        self.total_tokens += tot
+                        m = self.by_model.setdefault(model, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+                        m["input_tokens"] += inp
+                        m["output_tokens"] += out
+                        m["total_tokens"] += tot
+        except Exception as e:
+            logger.warning(f"No se pudo registrar el uso de tokens: {e}")
+
+def _set_usage_headers(response: Response, tracker: "TokenUsageTracker"):
+    response.headers["X-Usage-Input-Tokens"] = str(tracker.input_tokens)
+    response.headers["X-Usage-Output-Tokens"] = str(tracker.output_tokens)
+    response.headers["X-Usage-Total-Tokens"] = str(tracker.total_tokens)
+    response.headers["X-Usage-By-Model"] = json.dumps(tracker.by_model)
+
 # Helper function para obtener vector store (reutiliza conexiones)
+@lru_cache(maxsize=100)
 def get_vector_store(user_id: str) -> Chroma:
     """
     Obtiene o crea una instancia de Chroma para un usuario específico.
-    Reutiliza la conexión cuando es posible.
+    Utiliza lru_cache para evitar la re-instanciación costosa.
     """
     return Chroma(
         collection_name=f"{user_id}_credit_collection",
@@ -304,8 +383,14 @@ async def add_user_credit_data(historic_credit:CreditRequest):
                     ))
 
 
-        if get_collection_name(historic_credit.USER_ID) in [c.name for c in client.list_collections()]:
+        # Optimización: Intentar borrar directamente sin listar todas las colecciones
+        try:
             client.delete_collection(name=get_collection_name(historic_credit.USER_ID))
+            # Limpiar el caché de la instancia borrada
+            get_vector_store.cache_clear()
+        except Exception:
+            # Si no existe, no hacemos nada
+            pass
 
 
         uuids = [get_collection_name(historic_credit.USER_ID) + str(uuid4()) for _ in range(len(documents))]
@@ -474,11 +559,16 @@ async def get_is_user_credit_data(request:IsUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
-    # if the collection exists, and collection has documents, return ok
-    if (get_collection_name(request.user_id) in [c.name for c in client.list_collections()] and len(client.get_collection(name=get_collection_name(request.user_id)).get(where={"user_id": request.user_id})['documents']) > 0):
-        return "ok"
-    else:
-        raise HTTPException(status_code=404, detail="This user does'nt have credit data")
+    # Optimización: Acceso directo a la colección sin listar todas (O(1) vs O(N))
+    try:
+        collection = client.get_collection(name=get_collection_name(request.user_id))
+        docs = collection.get(where={"user_id": request.user_id}, limit=1)
+        if len(docs['documents']) > 0:
+            return "ok"
+    except (ValueError, Exception):
+        pass
+
+    raise HTTPException(status_code=404, detail="This user does'nt have credit data")
 
 class DeleteUserCreditDataRequest(BaseModel):
     API_KEY: str
@@ -490,10 +580,11 @@ async def delete_user_credit_data(request: DeleteUserCreditDataRequest):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     
-    if (get_collection_name(request.user_id) not in [c.name for c in client.list_collections()]):
-        return "ok"
-
-    client.delete_collection(name=get_collection_name(request.user_id))
+    try:
+        client.delete_collection(name=get_collection_name(request.user_id))
+        get_vector_store.cache_clear()
+    except Exception:
+        pass
 
     return "ok"
 
@@ -1111,6 +1202,11 @@ def get_clean_report(report: str):
 
     return report
 
+@lru_cache(maxsize=100)
+def get_clean_report_cached(report_str: str):
+    """Versión cacheada para evitar procesamiento repetitivo de regex sobre el mismo reporte."""
+    return get_clean_report(report_str)
+
 def get_user_report(user_id:str, split: bool = False):
     collection = client.get_collection(name=get_collection_name(user_id))
 
@@ -1165,10 +1261,10 @@ def get_user_report(user_id:str, split: bool = False):
         
         # report_accounts = [get_clean_report(report_account) for report_account in report_accounts]
 
-        return get_clean_report(report_inquiries), get_clean_report(report_accounts)
+        return get_clean_report_cached(report_inquiries), get_clean_report_cached(report_accounts)
 
     report = "\n".join([dispute for dispute in disputes])
-    report = get_clean_report(report)
+    report = get_clean_report_cached(report)
 
     return report
 
@@ -1205,14 +1301,22 @@ def _should_filter_dispute(error: ErrorDispute) -> bool:
     return any(phrase in text_to_scan for phrase in DISPUTE_FILTER_PHRASES)
 
 @app.post("/get-disputes")
-async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
+async def get_disputes(request:GetDisputesRequest, response: Response) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
 
     report_inquiries, report_accounts = get_user_report(request.user_id, split=True)
 
     logger.error(f"Report inquiries: {report_inquiries}")
     logger.error(f"Report accounts: {report_accounts}")
+
+    cache_key = _input_hash(report_inquiries, report_accounts, request.reasoning_effort)
+    cached = _disputes_cache.get((request.user_id, cache_key))
+    if cached is not None:
+        _set_usage_headers(response, tracker)  # 0 tokens: servido desde caché
+        return cached
 
     prompt_inquiries = f"""
     Eres un sistema de reparación de crédito y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) y detectar posibles errores relacionados únicamente con las inquiries.
@@ -1275,17 +1379,20 @@ async def get_disputes(request:GetDisputesRequest) -> list[ErrorDispute]:
         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_accounts}"}
     ]
 
-    tasks = [structured_llm.ainvoke(messages_inquiries), structured_llm.ainvoke(messages_accounts)]
+    cfg = {"callbacks": [tracker]}
+    tasks = [structured_llm.ainvoke(messages_inquiries, config=cfg), structured_llm.ainvoke(messages_accounts, config=cfg)]
 
-    responses = await asyncio.gather(*tasks)
+    llm_responses = await asyncio.gather(*tasks)
 
     errors = []
 
-    for response in responses:
-        errors.extend(response.errors)
+    for llm_response in llm_responses:
+        errors.extend(llm_response.errors)
 
     errors = [error for error in errors if not _should_filter_dispute(error)]
 
+    _cache_put(_disputes_cache, request.user_id, cache_key, errors)
+    _set_usage_headers(response, tracker)
     return errors
 
 class GetDisputesRequest(BaseModel):
@@ -1697,7 +1804,7 @@ def get_error_string(error: Optional[ErrorDisputeWithId] | ErrorDispute) -> str:
 
 BATCH_SIZE_VERIFY_ERRORS = 10
 
-def _verify_errors_batch(errors_batch: list, report: str) -> VerifyErrorsResponse:
+def _verify_errors_batch(errors_batch: list, report: str, config: dict = None) -> VerifyErrorsResponse:
     """Verifica un lote de hasta 10 errores contra el reporte. Uso interno en paralelo."""
     errors_text = "\n"
     for i, error in enumerate(errors_batch, 1):
@@ -1714,30 +1821,44 @@ def _verify_errors_batch(errors_batch: list, report: str) -> VerifyErrorsRespons
     """
     llm = ChatOpenAI(model="gpt-5.2", reasoning_effort=ReasoningEffortEnum.MEDIUM)
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
-    return structured_llm.invoke(prompt)
+    return structured_llm.invoke(prompt, config=config)
 
 @app.post("/verify-errors")
-def verify_errors(request: VerifyErrorsRequest) -> VerifyErrorsResponse:
+def verify_errors(request: VerifyErrorsRequest, response: Response) -> VerifyErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
 
     report = get_user_report(request.user_id)
     errors = [error for error in request.errors if not _should_filter_dispute(error)]
     if not errors:
+        _set_usage_headers(response, tracker)
         return VerifyErrorsResponse(still_on_report=[])
+
+    # El resultado es determinista respecto al reporte + los errores a verificar
+    cache_key = _input_hash(report, "".join(get_error_string(e) for e in errors))
+    cached = _verify_cache.get((request.user_id, cache_key))
+    if cached is not None:
+        _set_usage_headers(response, tracker)  # 0 tokens: servido desde caché
+        return cached
 
     # Partir en lotes de máximo 10
     batches = [errors[i : i + BATCH_SIZE_VERIFY_ERRORS] for i in range(0, len(errors), BATCH_SIZE_VERIFY_ERRORS)]
     all_still_on_report: list[RepoError] = []
 
+    cfg = {"callbacks": [tracker]}
     # Procesar lotes en paralelo (máximo 10 en paralelo por el tamaño del lote)
     with ThreadPoolExecutor(max_workers=len(batches)) as executor:
-        futures = {executor.submit(_verify_errors_batch, batch, report): batch for batch in batches}
+        futures = {executor.submit(_verify_errors_batch, batch, report, cfg): batch for batch in batches}
         for future in as_completed(futures):
             batch_response = future.result()
             all_still_on_report.extend(batch_response.still_on_report)
 
-    return VerifyErrorsResponse(still_on_report=all_still_on_report)
+    result = VerifyErrorsResponse(still_on_report=all_still_on_report)
+    _cache_put(_verify_cache, request.user_id, cache_key, result)
+    _set_usage_headers(response, tracker)
+    return result
 
 class CompareErrorsRequest(BaseModel):
     errors_1: list[ErrorDispute]
@@ -1833,11 +1954,19 @@ def get_user_litigation_report(user_id: str) -> str:
     return "\n".join(results['documents'])
 
 @app.post("/get-litigation-errors")
-async def get_litigation_errors(request: GetLitigationErrorsRequest) -> list[LitigationError]:
+async def get_litigation_errors(request: GetLitigationErrorsRequest, response: Response) -> list[LitigationError]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
 
+    tracker = TokenUsageTracker()
+
     report = get_user_litigation_report(request.user_id)
+
+    cache_key = _input_hash(report, request.reasoning_effort)
+    cached = _litigation_cache.get((request.user_id, cache_key))
+    if cached is not None:
+        _set_usage_headers(response, tracker)  # 0 tokens: servido desde caché
+        return cached
 
     messages = [
         {"role": "system", "content": get_litigation_errors_prompt},
@@ -1850,9 +1979,129 @@ async def get_litigation_errors(request: GetLitigationErrorsRequest) -> list[Lit
     )
     structured_llm = llm.with_structured_output(LitigationErrors)
 
-    response = await structured_llm.ainvoke(messages)
+    llm_response = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
 
-    return response.errors
+    _cache_put(_litigation_cache, request.user_id, cache_key, llm_response.errors)
+    _set_usage_headers(response, tracker)
+    return llm_response.errors
+
+
+# %% Lessons %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@app.post("/add-lesson")
+async def add_lesson(request: AddLessonRequest):
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    lesson = request.lesson
+    def upsert():
+        # Dummy embedding: lessons are retrieved with get(), not vector search
+        get_lessons_collection().upsert(
+            ids=[lesson.lesson_id],
+            embeddings=[[0.0]],
+            metadatas=[{
+                "lesson_id": lesson.lesson_id,
+                "title": lesson.title,
+                "description": lesson.description,
+                "level_hint": lesson.level_hint,
+            }],
+        )
+    await asyncio.to_thread(upsert)
+    return {"ok": True}
+
+
+@app.get("/get-lessons")
+async def get_lessons(api_key: str = Query(alias="api_key")):
+    if os.getenv("API_KEY") != api_key:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    def fetch():
+        return get_lessons_collection().get()
+    results = await asyncio.to_thread(fetch)
+
+    lessons = []
+    for meta in results.get("metadatas", []):
+        if meta:
+            lessons.append(Lesson(
+                lesson_id=meta["lesson_id"],
+                title=meta["title"],
+                description=meta["description"],
+                level_hint=meta["level_hint"],
+            ))
+    return lessons
+
+
+# %% Credit Plan %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+@app.post("/generate-plan")
+async def generate_plan(request: GeneratePlanRequest, response: Response) -> CreditPlan:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
+
+    report_summary_text = await asyncio.to_thread(get_user_report, request.user_id)
+
+    def fetch_lessons():
+        return get_lessons_collection().get()
+    lesson_results = await asyncio.to_thread(fetch_lessons)
+
+    lessons_text = "\n".join([
+        f"- ID: {m['lesson_id']} | Nivel sugerido: {m['level_hint']} | Título: {m['title']} | Descripción: {m['description']}"
+        for m in lesson_results.get("metadatas", []) if m
+    ]) or "No hay lecciones disponibles."
+
+    # El plan se mantiene hasta que su propia duración (en meses) se cumpla; pasado
+    # ese tiempo, o si el reporte cambia, se genera uno nuevo.
+    cache_key = _input_hash(report_summary_text, lessons_text)
+    cached = _plan_cache.get((request.user_id, cache_key))
+    if cached is not None:
+        cached_plan, expiry_ts = cached
+        if time.time() < expiry_ts:
+            _set_usage_headers(response, tracker)  # 0 tokens: servido desde caché
+            return cached_plan
+
+    prompt = f"""
+Eres un experto en reparación de crédito en Estados Unidos. Basándote en el reporte de crédito del usuario,
+genera un plan personalizado de 5 niveles con tareas semanales concretas y accionables.
+
+NIVELES (usa exactamente estos nombres en el campo `name`):
+1. Conoce tu crédito
+2. Construyendo tu base
+3. Optimizando
+4. Ampliando
+5. Crédito Pro
+
+REGLAS ESTRICTAS:
+- Cada nivel contiene 1 o 2 meses (MonthPlan). Cada mes tiene exactamente 4 tareas (una por semana, weeks 1 a 4).
+- task_type debe ser exactamente uno de: "action", "dispute", "lesson".
+    - "action": pago de deuda, apertura de cuenta asegurada, reducción de utilización, solicitar aumento de límite, etc.
+    - "dispute": disputar un error específico del reporte (inquiry, colección, charge-off, etc.).
+    - "lesson": completar una lección del curso. Usa el lesson_id exacto de la lista de lecciones.
+- Si no hay lecciones disponibles o no aplica ninguna, no generes tareas de tipo "lesson".
+- estimated_score_gain: puntos de crédito estimados que el usuario ganará ESE mes (entero positivo, realista según su perfil).
+- Priorización dentro de cada mes: primero reducción de utilización, luego disputas, luego nuevos hábitos o lecciones.
+- status: nivel 1 → "in_progress", niveles 2-5 → "locked".
+- Los títulos de las tareas deben ser específicos al usuario (menciona acreedores reales, montos reales del reporte).
+
+REPORTE DEL USUARIO:
+{report_summary_text}
+
+LECCIONES DISPONIBLES:
+{lessons_text}
+"""
+
+    llm = ChatOpenAI(model="gpt-5.2", temperature=0)
+    structured_llm = llm.with_structured_output(CreditPlan)
+    plan = await structured_llm.ainvoke(prompt, config={"callbacks": [tracker]})
+
+    # Duración total del plan = suma de meses de todos los niveles. El caché expira
+    # al completarse esa duración, momento en que se generará otro plan.
+    total_months = sum(len(level.months) for level in plan.levels) or 1
+    expiry_ts = time.time() + total_months * 30 * 24 * 60 * 60
+    _cache_put(_plan_cache, request.user_id, cache_key, (plan, expiry_ts))
+    _set_usage_headers(response, tracker)
+    return plan
 
 
 # insert_general_knowledge()
