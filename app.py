@@ -420,10 +420,12 @@ class QueryResponse(BaseModel):
 
 # endpoint to retrieve an answer
 @app.post("/query")
-async def query(query_request:QueryRequest) -> QueryResponse:
+async def query(query_request:QueryRequest, response: Response) -> QueryResponse:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
-    
+
+    tracker = TokenUsageTracker()
+
     vector_store = get_vector_store(query_request.user_id)
     retriever = vector_store.as_retriever(
         search_type="similarity_score_threshold", 
@@ -468,9 +470,10 @@ async def query(query_request:QueryRequest) -> QueryResponse:
     prompt = ChatPromptTemplate(memory)
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
-    response = chain.invoke({"input": query_request.query})
+    chain_response = chain.invoke({"input": query_request.query}, config={"callbacks": [tracker]})
+    _set_usage_headers(response, tracker)
     return {
-        'answer': response['answer'],
+        'answer': chain_response['answer'],
     }
 
 class AiAnswer(BaseModel):
@@ -481,9 +484,11 @@ class PosAiAnswer(BaseModel):
     must_talk_with_a_human: bool = Field(description="Si el usuario debe contactar o no con un humano para la pregunta que esta haciendo");
 
 @app.post("/query-without-limits")
-async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
+async def query_without_limits(query_request:QueryRequest, response: Response) -> AiAnswer:
     if os.getenv("API_KEY") != query_request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
 
     vector_store = get_vector_store(query_request.user_id)
     
@@ -525,7 +530,7 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
     prompt = ChatPromptTemplate(memory)
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
     chain = create_retrieval_chain(retriever, question_answer_chain)
-    response = chain.invoke({"input": query_request.query})
+    chain_response = chain.invoke({"input": query_request.query}, config={"callbacks": [tracker]})
 
     llm = ChatOpenAI()
 
@@ -541,10 +546,11 @@ async def query_without_limits(query_request:QueryRequest) -> AiAnswer:
 
     prompts.append(HumanMessage(content=query_request.query))
 
-    pos_response = structured_llm.invoke(prompts)
-    
+    pos_response = structured_llm.invoke(prompts, config={"callbacks": [tracker]})
+
+    _set_usage_headers(response, tracker)
     return {
-        'answer': response['answer'],
+        'answer': chain_response['answer'],
         'must_talk_with_a_human': pos_response.must_talk_with_a_human
     }
 
@@ -617,9 +623,10 @@ class ScanImageRequest(BaseModel):
     image_url: Union[str, list[str]]
 
 @app.post("/scan_image")
-async def scan_image(request: ScanImageRequest) -> DocumentData:
+async def scan_image(request: ScanImageRequest, response: Response) -> DocumentData:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+    tracker = TokenUsageTracker()
     vision_model = ChatOpenAI(model='gpt-4o')
     content = [
             {
@@ -643,7 +650,8 @@ async def scan_image(request: ScanImageRequest) -> DocumentData:
         HumanMessage(content=content)
     ]
     structured_llm = vision_model.with_structured_output(DocumentData)
-    vision_response = structured_llm.invoke(prompts)
+    vision_response = structured_llm.invoke(prompts, config={"callbacks": [tracker]})
+    _set_usage_headers(response, tracker)
     return vision_response
 
 # paraphrase letter in english
@@ -655,9 +663,10 @@ class ParaphraseLetterRequest(BaseModel):
     letter: str
 
 @app.post("/paraphrase-letter")
-async def paraphrase_letter(request: ParaphraseLetterRequest):
+async def paraphrase_letter(request: ParaphraseLetterRequest, response: Response):
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+    tracker = TokenUsageTracker()
     llm = ChatOpenAI()
     prompts = [
         SystemMessage("""
@@ -676,8 +685,9 @@ async def paraphrase_letter(request: ParaphraseLetterRequest):
         ] )
     ]
     structured_llm = llm.with_structured_output(ParaphraseLetterResponse)
-    response = structured_llm.invoke(prompts)
-    return response
+    result = structured_llm.invoke(prompts, config={"callbacks": [tracker]})
+    _set_usage_headers(response, tracker)
+    return result
 
 # def insert_general_knowledge():
 #     try:
@@ -1107,9 +1117,12 @@ def persist_pdf_extract_to_vector_store(user_id: str, extracted: CreditDataExtra
 @app.post("/add-user-credit-data-by-pdf")
 async def add_user_credit_data_by_pdf(
     request: AddUserCreditDataByPdfRequest,
+    response: Response,
 ) -> CreditDataExtractedFromPdf:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
 
     content: list[dict] = []
     if isinstance(request.image_url, list):
@@ -1128,9 +1141,10 @@ async def add_user_credit_data_by_pdf(
         temperature=0,
     )
     structured_llm = llm.with_structured_output(CreditDataExtractedFromPdf)
-    extracted = await structured_llm.ainvoke(messages)
+    extracted = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
     if request.user_id:
         persist_pdf_extract_to_vector_store(request.user_id, extracted, request.file_id)
+    _set_usage_headers(response, tracker)
     return extracted
 
 
@@ -1401,10 +1415,12 @@ class GetDisputesRequest(BaseModel):
     reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.NONE, description="El nivel de razonamiento a usar")
 
 @app.post("/get-disputes-by-pdf")
-async def get_disputes_by_pdf(request:GetDisputesRequest) -> list[ErrorDispute]:
+async def get_disputes_by_pdf(request:GetDisputesRequest, response: Response) -> list[ErrorDispute]:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
-    
+
+    tracker = TokenUsageTracker()
+
     content = []
 
     if type(request.image_url) == list:
@@ -1430,9 +1446,10 @@ async def get_disputes_by_pdf(request:GetDisputesRequest) -> list[ErrorDispute]:
     )
     structured_llm = llm.with_structured_output(ErrorsDispute)
 
-    response = await structured_llm.ainvoke(messages)
+    llm_response = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
 
-    return response.errors
+    _set_usage_headers(response, tracker)
+    return llm_response.errors
 
 import re
 from datetime import date
@@ -1470,7 +1487,7 @@ class GenerateLetterResponse(BaseModel):
 
 from utils.get_credit_repo_data import get_credit_repo_data
 
-async def get_letter_content(llm, error, request, header, footer, curr_date):
+async def get_letter_content(llm, error, request, header, footer, curr_date, config=None):
     repo_data = get_credit_repo_data(error['repo'])
 
     prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
@@ -1488,23 +1505,23 @@ async def get_letter_content(llm, error, request, header, footer, curr_date):
     Do not output anything except the completed letter text. Use the following input data:
     Errors: {error['errors']}"""
 
-    response = await llm.ainvoke(prompt)
+    response = await llm.ainvoke(prompt, config=config)
 
     return {
         'repo': error['repo'],
         'letter': f'{header}\n{error["repo"]}\n{repo_data["address"]}\n{repo_data["city"]}, {repo_data["state"]}, {repo_data["zip_code"]}\n\nDate: {curr_date}\n\nDear {error["repo"]},\n\n{response.content}\n{footer}'
     }
 
-async def get_creditor_information(creditor, error):
+async def get_creditor_information(creditor, error, config=None):
     llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="high")
-    prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute: 
+    prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute:
     {error}
     Creditor: {creditor}"""
     structured_llm = llm.with_structured_output(Address)
-    final_structured = await structured_llm.ainvoke(prompt)
+    final_structured = await structured_llm.ainvoke(prompt, config=config)
     return final_structured
 
-async def get_letter_content_creditor(llm, errors, creditor, creditor_data, request, header, footer, curr_date) -> LetterCreditor:
+async def get_letter_content_creditor(llm, errors, creditor, creditor_data, request, header, footer, curr_date, config=None) -> LetterCreditor:
     prompt = f"""You are a letter-writing assistant. Given the user's personal information and a list of credit report errors, produce a formal dispute letter:
     Write the body of a dispute letter to {creditor} for the {request.round}th round of disputes. 
     Do NOT include any header, footer, contact information, dates, or signatures. 
@@ -1517,14 +1534,14 @@ async def get_letter_content_creditor(llm, errors, creditor, creditor_data, requ
     Do not output anything except the completed letter text. Use the following input data:
     Errors: {errors}"""
 
-    response = await llm.ainvoke(prompt)
+    response = await llm.ainvoke(prompt, config=config)
 
     creditor_information = None
 
     if creditor_data is not None:
         creditor_information = creditor_data
     else:
-        creditor_information = await get_creditor_information(creditor, errors)
+        creditor_information = await get_creditor_information(creditor, errors, config=config)
 
     creditor_name = creditor or creditor_information.company_name
 
@@ -1535,9 +1552,12 @@ async def get_letter_content_creditor(llm, errors, creditor, creditor_data, requ
     }
 
 @app.post("/generate-letter")
-async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterResponse:
+async def generate_letter(request:GenerateLetterRequest, response: Response) -> GenerateLetterResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
+    cfg = {"callbacks": [tracker]}
 
     collection = client.get_collection(name=get_collection_name(request.user_id))
 
@@ -1696,7 +1716,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
     for error in error_list:
         if len(error['errors']):
             tasks.append(
-                get_letter_content(llm, error, request, header, footer, curr_date)
+                get_letter_content(llm, error, request, header, footer, curr_date, config=cfg)
             )
 
     if request.round > 3:
@@ -1724,14 +1744,15 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
 
             tasks.append(
                 get_letter_content_creditor(
-                    llm, 
-                    errors, 
-                    creditor, 
+                    llm,
+                    errors,
+                    creditor,
                     creditor_data,
-                    request, 
-                    header, 
-                    footer, 
-                    curr_date
+                    request,
+                    header,
+                    footer,
+                    curr_date,
+                    config=cfg
                 )
             )
 
@@ -1746,6 +1767,7 @@ async def generate_letter(request:GenerateLetterRequest) -> GenerateLetterRespon
         elif 'creditor' in letter:
             letters_creditor.append(letter)
 
+    _set_usage_headers(response, tracker)
     return {
         'letters': letters,
         'letters_creditor': letters_creditor,
@@ -1848,8 +1870,9 @@ def verify_errors(request: VerifyErrorsRequest, response: Response) -> VerifyErr
     all_still_on_report: list[RepoError] = []
 
     cfg = {"callbacks": [tracker]}
-    # Procesar lotes en paralelo (máximo 10 en paralelo por el tamaño del lote)
-    with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+    # Procesar lotes en paralelo, con un tope de hilos para no disparar decenas
+    # de llamadas simultáneas si llega una lista de errores muy grande.
+    with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
         futures = {executor.submit(_verify_errors_batch, batch, report, cfg): batch for batch in batches}
         for future in as_completed(futures):
             batch_response = future.result()
@@ -1869,9 +1892,11 @@ class CompareErrorsResponse(BaseModel):
     same_errors_ids: list[str]
 
 @app.post("/compare-errors")
-def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
+def compare_errors(request: CompareErrorsRequest, response: Response) -> CompareErrorsResponse:
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
+
+    tracker = TokenUsageTracker()
 
     errors_1_string = ""
     errors_2_string = ""
@@ -1899,8 +1924,9 @@ def compare_errors(request: CompareErrorsRequest) -> CompareErrorsResponse:
 
     llm = ChatOpenAI(model="gpt-5-mini")
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
-    response = structured_llm.invoke(prompt)
-    return response
+    result = structured_llm.invoke(prompt, config={"callbacks": [tracker]})
+    _set_usage_headers(response, tracker)
+    return result
 
 class LitigationErrorTypeEnum(str, Enum):
     POST_BK_NO_DISCLOSURE = "Reporte posterior a bancarrota sin divulgacion de bancarrota"
