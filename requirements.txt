@@ -6,3 +6,4 @@ uvicorn
 python-dotenv
 langchain-chroma>=0.1.2
 langchain_classic
+tiktoken

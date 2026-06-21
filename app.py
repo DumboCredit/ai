@@ -37,6 +37,7 @@ from langchain_chroma import Chroma
 from functools import lru_cache
 import hashlib
 import time
+import tiktoken
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
@@ -75,6 +76,7 @@ _disputes_cache: dict = {}      # (user_id, hash) -> list[ErrorDispute]
 _litigation_cache: dict = {}    # (user_id, hash) -> list[LitigationError]
 _verify_cache: dict = {}        # (user_id, hash) -> VerifyErrorsResponse
 _plan_cache: dict = {}          # (user_id, hash) -> (CreditPlan, expiry_ts)
+_letters_cache: dict = {}       # (user_id, hash) -> respuesta de generate-letter (idempotencia)
 
 
 # %% Tracking de consumo de tokens %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -119,6 +121,30 @@ def _set_usage_headers(response: Response, tracker: "TokenUsageTracker"):
     response.headers["X-Usage-Output-Tokens"] = str(tracker.output_tokens)
     response.headers["X-Usage-Total-Tokens"] = str(tracker.total_tokens)
     response.headers["X-Usage-By-Model"] = json.dumps(tracker.by_model)
+
+# --- Uso de tokens de EMBEDDINGS -------------------------------------------
+# Los embeddings de OpenAI sí consumen tokens (solo de entrada), pero LangChain
+# no expone ese uso por callbacks. Los calculamos localmente con tiktoken; el
+# conteo coincide con el tokenizador que usa OpenAI para el modelo de embeddings.
+EMBEDDING_MODEL = "text-embedding-3-large"
+try:
+    _embed_encoding = tiktoken.encoding_for_model(EMBEDDING_MODEL)
+except Exception:
+    _embed_encoding = tiktoken.get_encoding("cl100k_base")
+
+def _track_embedding_usage(tracker: "TokenUsageTracker", texts) -> int:
+    """Suma al tracker los tokens de entrada que costará embeber `texts`."""
+    n = 0
+    for t in texts:
+        if t:
+            n += len(_embed_encoding.encode(t))
+    with tracker._lock:
+        tracker.input_tokens += n
+        tracker.total_tokens += n
+        m = tracker.by_model.setdefault(EMBEDDING_MODEL, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+        m["input_tokens"] += n
+        m["total_tokens"] += n
+    return n
 
 # Helper function para obtener vector store (reutiliza conexiones)
 @lru_cache(maxsize=100)
@@ -176,9 +202,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # routes
 @app.post("/add-user-credit-data")
-async def add_user_credit_data(historic_credit:CreditRequest):
+async def add_user_credit_data(historic_credit:CreditRequest, response: Response):
         if os.getenv("API_KEY") != historic_credit.API_KEY:
             raise HTTPException(status_code=400, detail="Api key dont match")
+        tracker = TokenUsageTracker()
         documents = []
          
         # load personal data
@@ -395,8 +422,14 @@ async def add_user_credit_data(historic_credit:CreditRequest):
 
         uuids = [get_collection_name(historic_credit.USER_ID) + str(uuid4()) for _ in range(len(documents))]
         vector_store = get_vector_store(historic_credit.USER_ID)
+        _track_embedding_usage(tracker, [d.page_content for d in documents])
         vector_store.add_documents(documents=documents, ids=uuids)
 
+        # Solo emitimos headers (y por tanto registramos consumo) si de verdad se
+        # embebió algo. Sin datos -> 0 tokens, pero NO es un cache hit, así que no
+        # lo reportamos para no marcarlo como "cache".
+        if tracker.total_tokens > 0:
+            _set_usage_headers(response, tracker)
         return "ok"
   
 # model
@@ -1103,7 +1136,7 @@ def credit_extracted_from_pdf_to_documents(user_id: str, extracted: CreditDataEx
     return documents
 
 
-def persist_pdf_extract_to_vector_store(user_id: str, extracted: CreditDataExtractedFromPdf, file_id: str) -> None:
+def persist_pdf_extract_to_vector_store(user_id: str, extracted: CreditDataExtractedFromPdf, file_id: str, tracker: "TokenUsageTracker" = None) -> None:
     _delete_user_credit_documents_keep_general_knowledge(user_id, file_id)
     documents = credit_extracted_from_pdf_to_documents(user_id, extracted, file_id)
     if not documents:
@@ -1111,6 +1144,8 @@ def persist_pdf_extract_to_vector_store(user_id: str, extracted: CreditDataExtra
     collection_name = get_collection_name(user_id)
     uuids = [collection_name + str(uuid4()) for _ in range(len(documents))]
     vector_store = get_vector_store(user_id)
+    if tracker is not None:
+        _track_embedding_usage(tracker, [d.page_content for d in documents])
     vector_store.add_documents(documents=documents, ids=uuids)
 
 
@@ -1143,7 +1178,7 @@ async def add_user_credit_data_by_pdf(
     structured_llm = llm.with_structured_output(CreditDataExtractedFromPdf)
     extracted = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
     if request.user_id:
-        persist_pdf_extract_to_vector_store(request.user_id, extracted, request.file_id)
+        persist_pdf_extract_to_vector_store(request.user_id, extracted, request.file_id, tracker=tracker)
     _set_usage_headers(response, tracker)
     return extracted
 
@@ -1559,6 +1594,15 @@ async def generate_letter(request:GenerateLetterRequest, response: Response) -> 
     tracker = TokenUsageTracker()
     cfg = {"callbacks": [tracker]}
 
+    # Idempotencia: la misma solicitud (mismos errores, round y sender) devuelve
+    # las mismas cartas sin volver a llamar al LLM. Protege contra reintentos que
+    # de otro modo regenerarían cartas y volverían a gastar tokens.
+    idem_key = _input_hash(request.model_dump_json(exclude={"API_KEY"}))
+    cached = _letters_cache.get((request.user_id, idem_key))
+    if cached is not None:
+        _set_usage_headers(response, tracker)  # 0 tokens: idempotente
+        return cached
+
     collection = client.get_collection(name=get_collection_name(request.user_id))
 
     results = collection.get(
@@ -1767,8 +1811,7 @@ async def generate_letter(request:GenerateLetterRequest, response: Response) -> 
         elif 'creditor' in letter:
             letters_creditor.append(letter)
 
-    _set_usage_headers(response, tracker)
-    return {
+    result = {
         'letters': letters,
         'letters_creditor': letters_creditor,
         'sender': {
@@ -1781,6 +1824,10 @@ async def generate_letter(request:GenerateLetterRequest, response: Response) -> 
             'postal_code': postal_code
         }
     }
+
+    _cache_put(_letters_cache, request.user_id, idem_key, result)
+    _set_usage_headers(response, tracker)
+    return result
 
 class ErrorDisputeWithId(ErrorDispute):
     id: str
