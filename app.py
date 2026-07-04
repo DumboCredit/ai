@@ -25,8 +25,10 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
-from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest
+from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest, AddUserCreditDataV3Request, CreditReportV3
 from utils.get_score_rating import get_score_rating
+from utils.build_credit_documents_v3 import build_credit_documents_v3
+from utils.crypto import decrypt_body
 from utils.prompts import scan_documents, get_disputes_by_pdf_prompt, extract_credit_data_from_pdf_prompt, get_litigation_errors_prompt
 import json
 import asyncio
@@ -160,6 +162,37 @@ def get_vector_store(user_id: str) -> Chroma:
         persist_directory=credit_db_dir,
         collection_metadata={"hnsw:space": "cosine"},
     )
+
+
+def _embed_and_store_documents(user_id: str, documents: list, tracker: "TokenUsageTracker", response: Response) -> str:
+    """Reembebe (con idempotencia por hash) la colección de crédito del usuario.
+
+    Comparte la lógica de idempotencia/borrado/embedding de /add-user-credit-data:
+    si el contenido es idéntico al ya indexado no vuelve a embeber (el refresco hace
+    polling y reenvía los mismos datos varias veces, y re-embeber cuesta decenas de
+    miles de tokens cada vez)."""
+    content_hash = _input_hash(str(len(documents)), "\x00".join(d.page_content for d in documents))
+    if documents and _user_report_hash.get(user_id) == content_hash:
+        return "ok"
+
+    # Optimización: intentar borrar directamente sin listar todas las colecciones.
+    try:
+        client.delete_collection(name=get_collection_name(user_id))
+        get_vector_store.cache_clear()
+    except Exception:
+        pass
+
+    uuids = [get_collection_name(user_id) + str(uuid4()) for _ in range(len(documents))]
+    vector_store = get_vector_store(user_id)
+    _track_embedding_usage(tracker, [d.page_content for d in documents])
+    vector_store.add_documents(documents=documents, ids=uuids)
+    if documents:
+        _user_report_hash[user_id] = content_hash
+
+    # Solo emitimos headers (y registramos consumo) si de verdad se embebió algo.
+    if tracker.total_tokens > 0:
+        _set_usage_headers(response, tracker)
+    return "ok"
 
 
 # env vars
@@ -441,7 +474,33 @@ async def add_user_credit_data(historic_credit:CreditRequest, response: Response
         if tracker.total_tokens > 0:
             _set_usage_headers(response, tracker)
         return "ok"
-  
+
+
+@app.post("/add-user-credit-data-v3")
+async def add_user_credit_data_v3(request: AddUserCreditDataV3Request, response: Response):
+    """Igual que /add-user-credit-data pero con la estructura nueva (CreditReport 3B
+    de Equifax). El reporte llega cifrado en `data` (AES-256-GCM, esquema de dumbo-prod);
+    aquí se descifra, se convierte a Documents y se embebe en el vector store del usuario."""
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    try:
+        raw_report = decrypt_body(request.data)
+    except Exception as e:
+        logger.error(f"add-user-credit-data-v3: no se pudo descifrar el reporte: {e}")
+        raise HTTPException(status_code=400, detail="Could not decrypt credit data")
+
+    try:
+        report = CreditReportV3.model_validate(raw_report)
+    except Exception as e:
+        logger.error(f"add-user-credit-data-v3: reporte con formato invalido: {e}")
+        raise HTTPException(status_code=422, detail="Invalid credit report format")
+
+    tracker = TokenUsageTracker()
+    documents = build_credit_documents_v3(request.USER_ID, report)
+    return _embed_and_store_documents(request.USER_ID, documents, tracker, response)
+
+
 # model
 class Message(BaseModel):
     input: Optional[str] = None
