@@ -1415,6 +1415,8 @@ def _normalize_text(value: Optional[Union[str, ErrorTypeEnum]]) -> str:
     return str(value).strip().lower()
 
 def _should_filter_dispute(error: ErrorDispute) -> bool:
+    if _looks_like_multiple_creditors(error.creditor) or _looks_like_multiple_creditors(error.name_account):
+        return True
     text_to_scan = " ".join(
         [
             _normalize_text(error.reason),
@@ -1475,6 +1477,8 @@ async def get_disputes(request:GetDisputesRequest, response: Response) -> list[E
     4. Manejo de Marcas Negativas:
         - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
         - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
+
+    Regla obligatoria: cada objeto de error corresponde a EXACTAMENTE UNA cuenta / un acreedor. NUNCA combines varios acreedores o cuentas en un mismo objeto; si un error afecta a varias cuentas, genera un objeto SEPARADO por cada una. `name_account` y `creditor` deben tener el nombre de UN SOLO acreedor tal cual aparece en el reporte.
 
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - Rason por la q el usuario quiere disputar(reason)
@@ -2062,10 +2066,10 @@ class LitigationError(BaseModel):
     error_type: LitigationErrorTypeEnum = Field(description="El tipo de error litigable, uno de los ocho valores del enum")
     reason: str = Field(description="Razon / descripcion de por que es un error litigable")
     evidence: str = Field(description="La evidencia textual o datos del informe que sustentan el error")
-    name_account: Optional[str] = Field(default=None, description="Nombre de la cuenta o acreedor exacto como aparece en el reporte, si aplica")
-    account_number: Optional[str] = Field(default=None, description="Numero de cuenta asociado, si aplica")
-    creditor: Optional[str] = Field(default=None, description="Acreedor de la cuenta, el nombre exacto como aparece en el reporte, si aplica")
-    credit_repo: Union[str, list[str]] = Field(description="El o los buros de credito implicados")
+    name_account: Optional[str] = Field(default=None, description="Nombre de UNA sola cuenta o acreedor, exacto como aparece en el reporte. Nunca combines varios acreedores aqui")
+    account_number: Optional[str] = Field(default=None, description="Numero de cuenta asociado (de una sola cuenta), si aplica")
+    creditor: Optional[str] = Field(default=None, description="Acreedor de UNA sola cuenta, el nombre exacto como aparece en el reporte. Nunca combines varios acreedores aqui")
+    credit_repo: Union[str, list[str]] = Field(description="El o los buros de credito donde aparece esta misma cuenta (Equifax/Experian/TransUnion)")
 
 class LitigationErrors(BaseModel):
     errors: list[LitigationError]
@@ -2074,6 +2078,18 @@ class GetLitigationErrorsRequest(BaseModel):
     API_KEY: str
     user_id: str
     reasoning_effort: ReasoningEffortEnum = Field(default=ReasoningEffortEnum.HIGH, description="El nivel de razonamiento a usar")
+
+def _looks_like_multiple_creditors(value: Optional[str]) -> bool:
+    """Un error de litigacion es de UNA sola cuenta. Si el acreedor/nombre viene
+    concatenado (varios acreedores en un mismo campo) es basura de la IA que se debe
+    descartar. El punto y coma casi nunca aparece en el nombre real de un acreedor,
+    asi que es una senal de alta precision de que la IA agrupo varias cuentas."""
+    if not value:
+        return False
+    return ";" in value
+
+def _should_filter_litigation(error: "LitigationError") -> bool:
+    return _looks_like_multiple_creditors(error.creditor) or _looks_like_multiple_creditors(error.name_account)
 
 def get_user_litigation_report(user_id: str) -> str:
     """Reporte completo para analisis de litigacion: incluye informacion personal,
@@ -2110,7 +2126,7 @@ async def get_litigation_errors(request: GetLitigationErrorsRequest, response: R
 
     report = get_user_litigation_report(request.user_id)
 
-    cache_key = _input_hash(report, request.reasoning_effort)
+    cache_key = _input_hash(report, request.reasoning_effort, get_litigation_errors_prompt)
     cached = _litigation_cache.get((request.user_id, cache_key))
     if cached is not None:
         _set_usage_headers(response, tracker)  # 0 tokens: servido desde caché
@@ -2129,9 +2145,11 @@ async def get_litigation_errors(request: GetLitigationErrorsRequest, response: R
 
     llm_response = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
 
-    _cache_put(_litigation_cache, request.user_id, cache_key, llm_response.errors)
+    errors = [e for e in llm_response.errors if not _should_filter_litigation(e)]
+
+    _cache_put(_litigation_cache, request.user_id, cache_key, errors)
     _set_usage_headers(response, tracker)
-    return llm_response.errors
+    return errors
 
 
 # %% Lessons %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

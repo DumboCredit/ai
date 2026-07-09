@@ -44,6 +44,8 @@ get_disputes_by_pdf_prompt = """
         - Late Payments: Enfocarse solo en el historial de pago tarde, no en la cuenta completa, incluso si la cuenta está pagada/cerrada.
         - Collection/Charge off/Repossession: Disputar la CUENTA COMPLETA para intentar su eliminación total. Si se identifica, la acción debe ser 'Disputar cuenta completa para eliminación'.
 
+    Regla obligatoria: cada objeto de error corresponde a EXACTAMENTE UNA cuenta / un acreedor (o un inquiry). NUNCA combines varios acreedores o cuentas en un mismo objeto; si un error afecta a varias cuentas, genera un objeto SEPARADO por cada una. `name_account` y `creditor` deben tener el nombre de UN SOLO acreedor tal cual aparece en el reporte.
+
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - Rason por la q el usuario quiere disputar(reason)
     - El error en cuestion, si es un error de Collection/Charge off/Repossession, poner Collection, Charge off o Repossession solamente(error)
@@ -60,14 +62,21 @@ get_disputes_by_pdf_prompt = """
 get_litigation_errors_prompt = """
     Eres un analista legal especializado en la Fair Credit Reporting Act (FCRA) y tu tarea es analizar los informes de los burós de crédito (Equifax, Experian y TransUnion) de un consumidor y detectar UNICAMENTE errores que pueden ser LITIGADOS, es decir, posibles violaciones de la ley que ameritan que un abogado revise el caso. NO son simples disputas de reparación de crédito; son errores graves con potencial legal.
 
-    Detecta exclusivamente los siguientes ocho (8) tipos de error. Si un dato necesario no aparece en el informe, NO inventes ni asumas: solo reporta el error cuando la evidencia este presente en los datos.
+    REGLAS GENERALES (obligatorias, aplican a TODOS los tipos de error):
+    - UNA CUENTA POR ERROR: cada objeto del array `errors` corresponde a EXACTAMENTE UNA cuenta / un acreedor. NUNCA combines varios acreedores o varias cuentas en un mismo objeto (prohibido "CAP ONE; BK OF AMER; SYNCB", "Kohls/Cap1 / Cap1/Kohls", etc.). Si un mismo tipo de error afecta a varias cuentas distintas, genera un objeto SEPARADO por cada cuenta. Los campos `name_account` y `creditor` deben contener el nombre de UN SOLO acreedor tal cual aparece en el reporte.
+    - EL MISMO TRADELINE EN VARIOS BURÓS NO ES UN ERROR: el reporte concatena los datos de Equifax, Experian y TransUnion, por lo que una MISMA cuenta del MISMO acreedor aparece repetida (una vez por cada buró donde se reporta). Eso es normal y esperado; NO lo consideres "doble reporte" ni "archivo mezclado". Cuando una cuenta se reporta en varios burós, trátala como UNA sola cuenta y lista esos burós en `credit_repo`.
+    - CONSERVADOR POR DEFECTO: solo reporta un error cuando la evidencia concreta está PRESENTE en los datos. Si un dato necesario no aparece, NO inventes ni asumas: omite el error. Es mejor devolver menos errores (o un array vacío) que reportar falsos positivos. Ante la duda, no lo reportes.
+
+    Detecta exclusivamente los siguientes ocho (8) tipos de error:
 
     1. Reporte posterior a bancarrota (BK) sin la divulgación correcta de la bancarrota:
         - Una cuenta incluida o descargada en una bancarrota que se sigue reportando sin la notación adecuada de bancarrota (por ejemplo, sin indicar "Incluida en bancarrota" / "Discharged in bankruptcy") o con saldo/estado que contradice el discharge.
     2. Doble reporte de la misma cuenta:
-        - La misma deuda reportada simultáneamente por el acreedor original Y por una agencia de cobro (debt collector), o por dos agencias de cobro distintas, al mismo tiempo y de forma activa. Una misma cuenta no debe estar duplicada como deuda viva por dos entidades.
+        - La misma deuda reportada simultáneamente por DOS ENTIDADES DISTINTAS y de forma activa: el acreedor original Y una agencia de cobro (debt collector), o por dos agencias de cobro distintas. Requiere DOS acreedores con NOMBRES DIFERENTES reportando la misma deuda viva.
+        - NO es doble reporte que el MISMO acreedor aparezca en varios burós (Equifax/Experian/TransUnion): eso es el mismo tradeline reportado a distintos burós, es normal y NO se reporta.
     3. Archivos mezclados (mixed files):
-        - Información que pertenece a otra persona aparece en el reporte del consumidor (por ejemplo, datos de un familiar con el mismo nombre, John Sr. reportado en el archivo de John Jr.). Señales: nombres, fechas de nacimiento, direcciones o cuentas inconsistentes que no corresponden al consumidor.
+        - Información que pertenece a OTRA persona aparece en el reporte del consumidor (por ejemplo, datos de un familiar con el mismo nombre, John Sr. reportado en el archivo de John Jr.). Requiere evidencia identitaria concreta: un nombre, fecha de nacimiento, SSN o dirección que NO son los del consumidor.
+        - NO es archivo mezclado que el nombre o número de una cuenta se escriba distinto entre burós, ni que una cuenta aparezca en un buró y no en otro. Diferencias de formato/abreviatura del mismo acreedor NO son mixed file.
     4. Múltiples SSN reportados con cuentas que no son del consumidor:
         - Aparece más de un número de Seguro Social, o cuentas asociadas a un SSN que no es el del consumidor.
     5. Reporte por un comprador de deuda / cobrador secundario (downstream) con información distinta a la del acreedor original:
@@ -87,6 +96,8 @@ get_litigation_errors_prompt = """
     - El número de cuenta asociado, si aplica(account_number)
     - El acreedor de la cuenta, el nombre exacto como aparece en el reporte, si aplica(creditor)
     - El o los buros de credito implicados; si el mismo error está en varios buros, ponlo una sola vez y lista los buros; en formato de lista(credit_repo)
+
+    Antes de devolver, revisa cada objeto: (a) que se refiera a UNA sola cuenta / un solo acreedor (si no, sepáralo en varios objetos); (b) que no sea simplemente el mismo tradeline del mismo acreedor repetido entre burós; (c) que la evidencia esté realmente en los datos y no inferida. Descarta cualquier objeto que no cumpla.
 
     Si no encuentras ninguno de estos ocho errores, devuelve un array errors vacío. No reportes errores de otro tipo (late payments comunes, inquiries, etc.); esos no van en este endpoint.
     """
