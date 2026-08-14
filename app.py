@@ -1357,11 +1357,25 @@ def get_user_report(user_id:str, split: bool = False):
         report_inquiries = report_inquiries + "\n" + "Cuentas involucradas: "
 
         # get the creditor name from "Nombre del acreedor: <name>" to "." and is closed indicator
-        account_creditor_names = ", ".join([
-            re.search(r"Nombre del acreedor:\s*(.*?)\.", dispute).group(1)
-            + (" (" + re.search(r"La cuenta esta\s*(.*?)\.", dispute).group(1) + "). " if re.search(r"La cuenta esta\s*(.*?)\.", dispute) else " (abierta). ")
-            for dispute in disputes if 'Consulta' not in dispute
-        ])
+        # No todo documento que no sea 'Consulta' es una cuenta con acreedor: los registros
+        # publicos (bancarrotas, gravamenes) nunca traen acreedor, y una cuenta puede venir
+        # sin nombre de acreedor. Hacer .group(1) a secas tumbaba el endpoint entero con
+        # "'NoneType' object has no attribute 'group'" para cualquier usuario con bancarrota.
+        account_names = []
+        for dispute in disputes:
+            if 'Consulta' in dispute:
+                continue
+
+            # Si no hay acreedor se cae al nombre de la cuenta: dejar fuera una cuenta abierta
+            # haria que el LLM disputara como "sin cuenta asociada" inquiries que si la tienen.
+            creditor = re.search(r"Nombre del acreedor:\s*(.*?)\.", dispute) or re.search(r"Acreedor/Cuenta:\s*(.*?)\.", dispute)
+            if not creditor:
+                continue
+
+            status = re.search(r"La cuenta esta\s*(.*?)\.", dispute)
+            account_names.append(creditor.group(1) + (" (" + status.group(1) + "). " if status else " (abierta). "))
+
+        account_creditor_names = ", ".join(account_names)
         report_inquiries = report_inquiries + "\n" + account_creditor_names
 
         report_accounts = "\n".join([dispute for dispute in disputes if 'Consulta' not in dispute])
