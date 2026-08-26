@@ -41,6 +41,32 @@ import hashlib
 import time
 import tiktoken
 
+# --- Modelos (GPT-5.6) -------------------------------------------------------
+# Dos niveles: MODEL_HEAVY para el analisis del reporte, las cartas y la vision;
+# MODEL_LIGHT para tareas mecanicas (chat RAG, clasificacion, comparacion).
+# Los modelos gpt-5.6 solo aceptan temperature=1 (por defecto): el balance
+# coste/calidad se controla con reasoning_effort.
+MODEL_HEAVY = os.getenv("MODEL_HEAVY", "gpt-5.6-terra")
+MODEL_LIGHT = os.getenv("MODEL_LIGHT", "gpt-5.6-luna")
+
+
+def build_llm(effort=None, vision=False, **kwargs) -> "ChatOpenAI":
+    """Elige el modelo a partir del nivel de razonamiento pedido.
+
+    terra cuesta 10x lo que luna por token, asi que solo compensa a partir de
+    effort high: por debajo de eso luna en high rinde igual o mejor y sigue
+    siendo mas barato que terra en none. Por eso none/low/medium se resuelven
+    con luna en high, y solo high/xhigh escalan a terra.
+
+    vision=True fuerza terra a cualquier effort: en las rutas con imagen el cuello
+    de botella es la percepcion, no el razonamiento, y mas effort en luna no
+    compensa un encoder de vision mas debil.
+    """
+    effort = getattr(effort, "value", effort) or "none"
+    if vision or effort in ("high", "xhigh"):
+        return ChatOpenAI(model=MODEL_HEAVY, reasoning_effort=effort, **kwargs)
+    return ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="high", **kwargs)
+
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 credit_db_dir = "./credit_db"
@@ -534,7 +560,7 @@ async def query(query_request:QueryRequest, response: Response) -> QueryResponse
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="low")
 
     system_prompt = (
         f"Eres un asistente inteligente dentro de Dumbo Credit."
@@ -599,7 +625,7 @@ async def query_without_limits(query_request:QueryRequest, response: Response) -
         search_kwargs={"score_threshold": 0.2, "k": 30, "filter": {'$or':[{"user_id": query_request.user_id}, {"source": "General Knowledge"}]}  }
     )
     
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="low")
 
     system_prompt = (
         f"Eres un asistente inteligente dentro de Dumbo Credit."
@@ -634,7 +660,7 @@ async def query_without_limits(query_request:QueryRequest, response: Response) -
     chain = create_retrieval_chain(retriever, question_answer_chain)
     chain_response = chain.invoke({"input": query_request.query}, config={"callbacks": [tracker]})
 
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="none")
 
     structured_llm = llm.with_structured_output(PosAiAnswer)
 
@@ -730,7 +756,7 @@ async def scan_image(request: ScanImageRequest, response: Response) -> DocumentD
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     tracker = TokenUsageTracker()
-    vision_model = ChatOpenAI(model='gpt-4o')
+    vision_model = build_llm("low", vision=True)
     content = [
             {
                 'type': 'text',
@@ -770,7 +796,7 @@ async def paraphrase_letter(request: ParaphraseLetterRequest, response: Response
     if os.getenv("API_KEY") != request.API_KEY:
         raise HTTPException(status_code=400, detail="Api key dont match")
     tracker = TokenUsageTracker()
-    llm = ChatOpenAI()
+    llm = ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="low")
     prompts = [
         SystemMessage("""
                       Your task is to paraphrase this letter, keeping professional tone and style.  
@@ -1240,11 +1266,7 @@ async def add_user_credit_data_by_pdf(
         {"role": "system", "content": extract_credit_data_from_pdf_prompt},
         {"role": "user", "content": content},
     ]
-    llm = ChatOpenAI(
-        model="gpt-5.2",
-        reasoning_effort=request.reasoning_effort.value if request.reasoning_effort else "none",
-        temperature=0,
-    )
+    llm = build_llm(request.reasoning_effort, vision=True)
     structured_llm = llm.with_structured_output(CreditDataExtractedFromPdf)
     extracted = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
     if request.user_id:
@@ -1507,11 +1529,7 @@ async def get_disputes(request:GetDisputesRequest, response: Response) -> list[E
         {"role": "system", "content": prompt_inquiries},
         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report_inquiries}"}
     ]
-    llm = ChatOpenAI(
-        model="gpt-5.2",
-        reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
-        temperature=0,
-    )
+    llm = build_llm(request.reasoning_effort)
     structured_llm = llm.with_structured_output(ErrorsDispute)
 
     messages_accounts = [
@@ -1565,11 +1583,7 @@ async def get_disputes_by_pdf(request:GetDisputesRequest, response: Response) ->
         {"role": "system", "content": get_disputes_by_pdf_prompt},
         {"role": "user", "content": content}
     ]
-    llm = ChatOpenAI(
-        model="gpt-5.2",
-        reasoning_effort=request.reasoning_effort if request.reasoning_effort else "none",
-        temperature=0,
-    )
+    llm = build_llm(request.reasoning_effort, vision=True)
     structured_llm = llm.with_structured_output(ErrorsDispute)
 
     llm_response = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
@@ -1639,7 +1653,7 @@ async def get_letter_content(llm, error, request, header, footer, curr_date, con
     }
 
 async def get_creditor_information(creditor, error, config=None):
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="high")
+    llm = build_llm("high")
     prompt = f"""You are a helpful research assistant. Use web search to find accurate, up-to-date information. You are given a creditor name and you need to find the mailing address for send a dispute letter information about the creditor on the US. This is i want to dispute:
     {error}
     Creditor: {creditor}"""
@@ -1770,7 +1784,7 @@ async def generate_letter(request:GenerateLetterRequest, response: Response) -> 
 
     footer = f"\nSincerely,\n\n{full_name}"
 
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort="low")
+    llm = build_llm("low")
 
     equifax_errors = [
         {
@@ -1979,7 +1993,7 @@ def _verify_errors_batch(errors_batch: list, report: str, config: dict = None) -
         Los informes de los tres burós se encuentran a continuación:
         {report}
     """
-    llm = ChatOpenAI(model="gpt-5.2", reasoning_effort=ReasoningEffortEnum.MEDIUM)
+    llm = build_llm(ReasoningEffortEnum.MEDIUM)
     structured_llm = llm.with_structured_output(VerifyErrorsResponse)
     return structured_llm.invoke(prompt, config=config)
 
@@ -2060,7 +2074,7 @@ def compare_errors(request: CompareErrorsRequest, response: Response) -> Compare
         Solo compara si estan en dos listados diferentes, si estan en el mismo listado repetidos no.
     """
 
-    llm = ChatOpenAI(model="gpt-5-mini")
+    llm = ChatOpenAI(model=MODEL_LIGHT, reasoning_effort="low")
     structured_llm = llm.with_structured_output(CompareErrorsResponse)
     result = structured_llm.invoke(prompt, config={"callbacks": [tracker]})
     _set_usage_headers(response, tracker)
@@ -2150,11 +2164,7 @@ async def get_litigation_errors(request: GetLitigationErrorsRequest, response: R
         {"role": "system", "content": get_litigation_errors_prompt},
         {"role": "user", "content": f"Los informes de los tres burós se encuentran a continuación: {report}"}
     ]
-    llm = ChatOpenAI(
-        model="gpt-5.2",
-        reasoning_effort=request.reasoning_effort if request.reasoning_effort else ReasoningEffortEnum.HIGH,
-        temperature=0,
-    )
+    llm = build_llm(request.reasoning_effort or ReasoningEffortEnum.HIGH)
     structured_llm = llm.with_structured_output(LitigationErrors)
 
     llm_response = await structured_llm.ainvoke(messages, config={"callbacks": [tracker]})
@@ -2271,7 +2281,7 @@ LECCIONES DISPONIBLES:
 {lessons_text}
 """
 
-    llm = ChatOpenAI(model="gpt-5.2", temperature=0)
+    llm = build_llm("medium")
     structured_llm = llm.with_structured_output(CreditPlan)
     plan = await structured_llm.ainvoke(prompt, config={"callbacks": [tracker]})
 
