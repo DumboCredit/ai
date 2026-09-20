@@ -2092,8 +2092,10 @@ class LitigationErrorTypeEnum(str, Enum):
 
 class LitigationError(BaseModel):
     error_type: LitigationErrorTypeEnum = Field(description="El tipo de error litigable, uno de los ocho valores del enum")
-    reason: str = Field(description="Razon / descripcion de por que es un error litigable")
-    evidence: str = Field(description="La evidencia textual o datos del informe que sustentan el error")
+    reason: str = Field(description="Razon / descripcion en español de por que es un error litigable")
+    reason_en: str = Field(description="Reason / description in English of why it is a litigable error")
+    evidence: str = Field(description="La evidencia textual o datos del informe que sustentan el error, en español")
+    evidence_en: str = Field(description="The textual evidence or report data supporting the error, in English")
     name_account: Optional[str] = Field(default=None, description="Nombre de UNA sola cuenta o acreedor, exacto como aparece en el reporte. Nunca combines varios acreedores aqui")
     account_number: Optional[str] = Field(default=None, description="Numero de cuenta asociado (de una sola cuenta), si aplica")
     creditor: Optional[str] = Field(default=None, description="Acreedor de UNA sola cuenta, el nombre exacto como aparece en el reporte. Nunca combines varios acreedores aqui")

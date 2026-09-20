@@ -40,7 +40,9 @@ Devuelve un **array** de errores. Si no encuentra ninguno, devuelve `[]`.
   {
     "error_type": "Doble reporte de la misma cuenta",
     "reason": "La deuda de CAPITAL ONE se reporta activa por el acreedor original y por MIDLAND a la vez.",
+    "reason_en": "The CAPITAL ONE debt is reported as active by both the original creditor and MIDLAND at the same time.",
     "evidence": "CAPITAL ONE saldo $1,200 (abierta) / MIDLAND FUNDING saldo $1,200 (colección abierta)",
+    "evidence_en": "CAPITAL ONE balance $1,200 (open) / MIDLAND FUNDING balance $1,200 (open collection)",
     "name_account": "MIDLAND FUNDING",
     "account_number": "5178XXXX",
     "creditor": "MIDLAND FUNDING LLC",
@@ -52,8 +54,10 @@ Devuelve un **array** de errores. Si no encuentra ninguno, devuelve `[]`.
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `error_type` | enum | Tipo de error litigable (uno de los 8 valores de abajo). |
-| `reason` | string | Por qué es un error litigable. |
-| `evidence` | string | Dato textual del reporte que lo sustenta. |
+| `reason` | string | Por qué es un error litigable (español). |
+| `reason_en` | string | La misma razón en inglés. |
+| `evidence` | string | Dato textual del reporte que lo sustenta (español). |
+| `evidence_en` | string | La misma evidencia en inglés. |
 | `name_account` | string \| null | Nombre de la cuenta/acreedor, si aplica. |
 | `account_number` | string \| null | Número de cuenta, si aplica. |
 | `creditor` | string \| null | Acreedor exacto como aparece en el reporte, si aplica. |

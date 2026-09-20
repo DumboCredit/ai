@@ -90,12 +90,16 @@ get_litigation_errors_prompt = """
 
     Devuelve un JSON con un array errors donde cada objeto dentro del array tenga:
     - El tipo de error litigable, usando exactamente uno de los ocho valores del enum(error_type)
-    - La razón / descripción de por qué es un error litigable, explicando la evidencia concreta del informe(reason)
-    - La evidencia textual o los datos del informe que sustentan el error(evidence)
+    - La razón / descripción EN ESPAÑOL de por qué es un error litigable, explicando la evidencia concreta del informe(reason)
+    - La MISMA razón / descripción EN INGLÉS(reason_en). Debe ser la traducción fiel de `reason`, no un resumen distinto.
+    - La evidencia textual o los datos del informe EN ESPAÑOL que sustentan el error(evidence)
+    - La MISMA evidencia EN INGLÉS(evidence_en). Debe ser la traducción fiel de `evidence`; conserva nombres de acreedores, números de cuenta y cifras tal cual aparecen en el reporte.
     - El nombre de la cuenta o acreedor exacto como aparece en el reporte, si aplica(name_account)
     - El número de cuenta asociado, si aplica(account_number)
     - El acreedor de la cuenta, el nombre exacto como aparece en el reporte, si aplica(creditor)
     - El o los buros de credito implicados; si el mismo error está en varios buros, ponlo una sola vez y lista los buros; en formato de lista(credit_repo)
+
+    BILINGÜE (obligatorio): `reason` y `evidence` van en español; `reason_en` y `evidence_en` van en inglés. No dejes vacíos los campos en inglés.
 
     Antes de devolver, revisa cada objeto: (a) que se refiera a UNA sola cuenta / un solo acreedor (si no, sepáralo en varios objetos); (b) que no sea simplemente el mismo tradeline del mismo acreedor repetido entre burós; (c) que la evidencia esté realmente en los datos y no inferida. Descarta cualquier objeto que no cumpla.
 
