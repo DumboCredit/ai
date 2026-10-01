@@ -25,7 +25,8 @@ from utils.get_liability_content import get_liability_content
 from utils.totals_liabilities import get_credit_cards_content, get_auto_loans_content, get_education_loans_content, get_mortgage_loans_content
 from utils.get_translation import get_translation
 from utils.get_city_by_code import get_city_by_code
-from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest, AddUserCreditDataV3Request, CreditReportV3
+from models import CreditRequest, Lesson, AddLessonRequest, CreditPlan, GeneratePlanRequest, AddUserCreditDataV3Request, CreditReportV3, SimulateScoreRequest, SimulateScoreResponse, SimulatedActionPlan, SimulationNarrative, BureauScoreImpact, ScoreFactorDelta, SimulationOptionsRequest, SimulationOptionsResponse, SimulationAccount, SimulationInquiry
+from utils import score_engine
 from utils.get_score_rating import get_score_rating
 from utils.build_credit_documents_v3 import build_credit_documents_v3
 from utils.crypto import decrypt_body
@@ -2294,6 +2295,229 @@ LECCIONES DISPONIBLES:
     _cache_put(_plan_cache, request.user_id, cache_key, (plan, expiry_ts))
     _set_usage_headers(response, tracker)
     return plan
+
+
+# %% Score Simulator %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Arquitectura: el LLM NO calcula puntos. Interpreta el texto del usuario y lo
+# traduce a acciones del catalogo; el motor determinista (utils/score_engine.py)
+# aplica esas acciones al reporte y calcula el delta por buro; un segundo paso de
+# LLM solo narra numeros que ya estan fijos. Asi el mismo texto da siempre el
+# mismo resultado y no hay forma de que el modelo invente un puntaje.
+
+# "Collection" es la seccion de cobranzas de v3; sin ella el simulador no ve
+# ninguna cobranza de un usuario v3 (en legacy llegan como CreditLiability).
+SIMULATION_SOURCES = ["CreditLiability", "Collection", "CreditInquiry", "CreditScore"]
+
+
+def _fetch_simulation_docs(user_id: str) -> dict:
+    collection = client.get_collection(name=get_collection_name(user_id))
+    return collection.get(
+        where={"$and": [{"user_id": user_id}, {"source": {"$in": SIMULATION_SOURCES}}]},
+        limit=None,
+    )
+
+
+async def _interpret_action(action: str, accounts: list, inquiries: list, tracker) -> SimulatedActionPlan:
+    """Texto libre -> acciones del catalogo, atadas a cuentas reales del reporte."""
+    prompt = f"""
+Eres un traductor de intenciones para un simulador de puntaje de credito. NO estimes puntos:
+tu unico trabajo es convertir lo que pide el usuario en acciones del catalogo, atadas a las
+cuentas reales de su reporte.
+
+PETICION DEL USUARIO:
+{action}
+
+CUENTAS DEL USUARIO (usa el ref exacto, p.ej. A3):
+{score_engine.accounts_for_llm(accounts)}
+
+CONSULTAS (inquiries) DEL USUARIO:
+{score_engine.inquiries_for_llm(inquiries)}
+
+CATALOGO DE ACCIONES:
+- pay_down_balance: pagar o abonar a una cuenta. `amount` en dolares; sin `amount` = pagar el saldo completo.
+- increase_balance: gastar mas / subir el saldo. `amount` en dolares.
+- max_out_cards: llevar al limite las tarjetas (con apply_to_all=true si son todas).
+- change_credit_limit: subir o bajar el limite; usa `new_limit`, o `amount` para el cambio relativo.
+- remove_account: eliminar del reporte una cuenta, cobranza o charge-off (disputa o acuerdo).
+  Con apply_to_all=true solo afecta a las cuentas en cobranza/charge-off.
+- remove_inquiry: eliminar una consulta dura. Usa `inquiry_ref`, o `count` para "las ultimas N".
+- remove_late_payments: borrar los atrasos de una cuenta (goodwill) dejandola al dia.
+- add_late_payment: simular dejar de pagar. `days_late` 30, 60 o 90 segun cuanto se atrase.
+- open_account: abrir cuenta nueva. `account_kind` (revolving/installment/mortgage), `new_limit`, `amount` como saldo inicial.
+- close_account: cerrar una cuenta abierta.
+- wait_months: dejar pasar el tiempo sin cambios; `months`.
+
+REGLAS:
+- Devuelve las acciones en el orden en que se aplicarian. Varias acciones son validas
+  ("pagar la tarjeta y disputar la coleccion" = dos acciones).
+- Ata cada accion a una cuenta concreta con `account_ref` cuando el usuario se refiere a una
+  cuenta ("mi Capital One", "la tarjeta con mas saldo"). Usa apply_to_all solo si habla en plural
+  de todas ("todas mis tarjetas", "todas las cobranzas").
+- "Dejar que se venza 2 meses" = add_late_payment con days_late=60. Tres meses o mas = 90.
+- "Pagar la mitad" = pay_down_balance con amount igual a la mitad del saldo que ves en la lista.
+- Si la peticion no se puede representar con el catalogo, devuelve actions vacio y explica por que
+  en unsupported_reason.
+- No inventes cuentas que no esten en la lista.
+"""
+    llm = build_llm("medium")
+    structured_llm = llm.with_structured_output(SimulatedActionPlan)
+    return await structured_llm.ainvoke(prompt, config={"callbacks": [tracker]})
+
+
+async def _narrate_simulation(action: str, plan: SimulatedActionPlan, results: list, notes: list, tracker) -> SimulationNarrative:
+    """Narrativa bilingue sobre numeros ya fijos. El LLM no puede cambiarlos."""
+    numbers = "\n".join([
+        f"- {r.bureau}: {r.current_score} -> {r.estimated_new_score} ({r.impact:+d} pts; rango {r.impact_min:+d} a {r.impact_max:+d}). "
+        f"Factores que movieron: " + (", ".join(f"{name} {delta:+.3f}" for name, delta in r.top_drivers()) or "ninguno")
+        + (f". Avisos: {'; '.join(r.warnings)}" if r.warnings else "")
+        for r in results
+    ])
+
+    prompt = f"""
+Eres un experto en credito explicando el resultado de una simulacion YA CALCULADA.
+
+PETICION ORIGINAL DEL USUARIO: {action}
+LO QUE SE SIMULO: {plan.interpretation}
+
+RESULTADO POR BURO (calculado por el motor, es definitivo):
+{numbers}
+
+SUPUESTOS Y LIMITACIONES YA DETECTADOS:
+{chr(10).join('- ' + n['es'] for n in notes) or '- ninguno'}
+
+INSTRUCCIONES:
+- Escribe 2 o 3 oraciones en español (campo explanation) explicando POR QUE se mueve el puntaje,
+  mencionando las cuentas reales implicadas y el factor FICO dominante segun la lista de factores.
+- explanation_en: la misma explicacion en ingles, traduccion fiel, no un resumen distinto.
+- NO cambies, redondees ni recalcules ningun numero: los puntos ya estan decididos.
+- Si hay avisos de que un buro no reporta la cuenta simulada, dilo en una frase.
+- Si el impacto es 0 porque el factor ya esta en su peor nivel, dilo explicitamente en vez de
+  sugerir que la accion es inocua.
+- Nombres de factores en lenguaje humano: payment_history = historial de pagos,
+  utilization = utilizacion de credito, credit_age = antiguedad, credit_mix = mezcla de creditos,
+  inquiries = credito nuevo / consultas.
+"""
+    llm = build_llm("medium")
+    structured_llm = llm.with_structured_output(SimulationNarrative)
+    return await structured_llm.ainvoke(prompt, config={"callbacks": [tracker]})
+
+
+@app.post("/get-simulation-options")
+async def get_simulation_options(request: SimulationOptionsRequest) -> SimulationOptionsResponse:
+    """Lo que se puede simular del reporte: cuentas y consultas con su `ref`.
+
+    El front lo necesita para armar la UI de toggles y sliders y luego mandar
+    acciones ya estructuradas a /simulate-score. No llama a ningun LLM.
+    """
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+
+    raw = await asyncio.to_thread(_fetch_simulation_docs, request.user_id)
+    profiles, accounts, inquiries = score_engine.parse_profiles(raw["documents"], raw["metadatas"])
+
+    return SimulationOptionsResponse(
+        scores={bureau: p.score for bureau, p in profiles.items() if p.score},
+        accounts=[
+            SimulationAccount(
+                ref=a.ref,
+                creditor=a.creditor,
+                kind=a.kind,
+                is_open=a.is_open,
+                balance=a.balance,
+                limit=a.limit,
+                utilization=round(a.utilization, 4) if a.utilization is not None else None,
+                is_collection=a.is_collection,
+                is_chargeoff=a.is_chargeoff,
+                late_payments=a.late30 + a.late60 + a.late90,
+                opened_at=a.opened_at.isoformat() if a.opened_at else None,
+                bureaus=sorted(a.tradeline_bureaus or a.bureaus),
+            )
+            for a in accounts
+        ],
+        inquiries=[
+            SimulationInquiry(
+                ref=i.ref,
+                name=i.name,
+                date=i.date.isoformat() if i.date else None,
+                bureaus=[b.strip() for b in i.bureau.split(",") if b.strip()],
+            )
+            for i in inquiries
+        ],
+    )
+
+
+@app.post("/simulate-score")
+async def simulate_score(request: SimulateScoreRequest, response: Response) -> SimulateScoreResponse:
+    if os.getenv("API_KEY") != request.API_KEY:
+        raise HTTPException(status_code=400, detail="Api key dont match")
+    if not request.action and not request.actions:
+        raise HTTPException(status_code=422, detail="Se requiere `action` (texto libre) o `actions` (estructuradas)")
+
+    tracker = TokenUsageTracker()
+
+    raw = await asyncio.to_thread(_fetch_simulation_docs, request.user_id)
+    profiles, accounts, inquiries = score_engine.parse_profiles(raw["documents"], raw["metadatas"])
+    if not any(p.score for p in profiles.values()):
+        # Sin puntaje por buro no hay ancla: antes se devolvian puntajes inventados.
+        raise HTTPException(status_code=409, detail="El reporte del usuario no trae puntajes por buro")
+
+    if request.actions:
+        plan = SimulatedActionPlan(
+            actions=request.actions,
+            interpretation=request.action or "; ".join(a.note for a in request.actions if a.note),
+        )
+    else:
+        plan = await _interpret_action(request.action, accounts, inquiries, tracker)
+        if not plan.actions:
+            raise HTTPException(
+                status_code=422,
+                detail=plan.unsupported_reason or "No se pudo interpretar la accion a simular",
+            )
+
+    results = score_engine.simulate(profiles, plan.actions)
+    notes = score_engine.feasibility_notes(profiles, plan.actions)
+    if request.explain:
+        narrative = await _narrate_simulation(request.action or plan.interpretation, plan, results, notes, tracker)
+    else:
+        # explain=false: cero LLM, respuesta determinista y sub-segundo. El front
+        # arma el texto con `factors` y `caveats`, que ya vienen calculados.
+        narrative = SimulationNarrative(explanation="", explanation_en="")
+
+    impacts = [
+        BureauScoreImpact(
+            bureau=r.bureau,
+            current_score=r.current_score,
+            estimated_new_score=r.estimated_new_score,
+            impact=r.impact,
+            impact_min=r.impact_min,
+            impact_max=r.impact_max,
+            factors=[
+                ScoreFactorDelta(
+                    factor=name,
+                    weight=score_engine.WEIGHTS[name],
+                    health_before=r.factors_before[name],
+                    health_after=r.factors_after[name],
+                    contribution=r.factor_deltas[name],
+                )
+                for name in score_engine.WEIGHTS
+            ],
+            notes=r.warnings,
+        )
+        for r in results
+    ]
+
+    _set_usage_headers(response, tracker)
+    return SimulateScoreResponse(
+        action=request.action or plan.interpretation,
+        interpreted_as=plan.interpretation,
+        actions=plan.actions,
+        impacts=impacts,
+        explanation=narrative.explanation,
+        explanation_en=narrative.explanation_en,
+        risk_level=score_engine.risk_level(results),
+        caveats=[n["es"] for n in notes],
+        caveats_en=[n["en"] for n in notes],
+    )
 
 
 # insert_general_knowledge()

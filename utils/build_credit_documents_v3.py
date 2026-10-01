@@ -310,6 +310,9 @@ def build_credit_documents_v3(user_id: str, report: CreditReportV3) -> list[Docu
                         "credit_repository": bureau,
                         "date": date,
                         "user_id": user_id,
+                        # Mismo id en todos los buros: cada buro escribe el nombre
+                        # del acreedor distinto ("WELLSFARGO" / "WELLS FARGO-PL&L").
+                        **({"inquiry_id": inquiry.id} if inquiry.id else {}),
                     },
                     id=f"inquiry_{bureau}_{name}_{date}",
                 )
@@ -328,6 +331,9 @@ def build_credit_documents_v3(user_id: str, report: CreditReportV3) -> list[Docu
                             "field": "liability",
                             "user_id": user_id,
                             "credit_repository": bureau,
+                            # Mismo id en los tres buros: el simulador sabe que es
+                            # la misma cuenta sin adivinarlo por saldo y fecha.
+                            **({"tradeline_id": account.id} if account.id else {}),
                         },
                         id=f"account_{bureau}_{category_key}_{account.number or account.name or len(documents)}",
                     )
@@ -344,6 +350,7 @@ def build_credit_documents_v3(user_id: str, report: CreditReportV3) -> list[Docu
                         "field": "collection",
                         "user_id": user_id,
                         "credit_repository": bureau,
+                        **({"tradeline_id": collection.id} if collection.id else {}),
                     },
                     id=f"collection_{bureau}_{collection.accountNumber or len(documents)}",
                 )
